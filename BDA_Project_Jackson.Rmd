@@ -18,7 +18,6 @@ library(INLA)
 
 ```
 
-
 ```{r}
 # load data
 
@@ -27,8 +26,6 @@ load("Agrimonia_Dataset_v_3_0_0.Rdata")
 df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
-
-
 
 ```{r}
 
@@ -50,10 +47,9 @@ points(unique_locs$Longitude, unique_locs$Latitude, pch = 19, col = "steelblue")
 df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 
+# Q from Zac: why is this an integer rather than a factor? I guess it probably doesn't make a difference once it's random effect?
+
 ```
-
-
-
 
 ```{r}
 
@@ -65,7 +61,6 @@ df$t_id <- as.integer(factor(format(df$Time, "%Y-%m")))
 
 
 ```
-
 
 ```{r}
 # create nearest neighbors graph to ensure INLA can identify locations closer to eachother
@@ -83,10 +78,9 @@ nb2INLA("stations.graph", nb)
 g <- inla.read.graph("stations.graph")
 
 
+# Qs from Zac: What/why are you doing here? what is nearest neighbours doing? Is this some kind of alternative to fmesher, creating a mesh?
+
 ```
-
-
-
 
 ```{r}
 
@@ -150,9 +144,6 @@ AIC(fit_lnorm)
 # go with gamma (lower AIC and better visual fit)
 
 ```
-
-
-
 
 ```{r}
 # try fitting bayesian spatio-temporal models with altitude as the covariate
@@ -219,7 +210,6 @@ m3 <- inla(
 
 ```
 
-
 ```{r}
 # evaluate fits using WAIC
 
@@ -231,5 +221,3 @@ cat("M3 WAIC =",  m3$waic$waic)
 
 
 ```
-
-
