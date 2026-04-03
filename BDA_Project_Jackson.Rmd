@@ -14,9 +14,11 @@ library(maps)
 library(spdep)
 library(MASS)
 library(INLA)
-
+library(inlabru)
+library(sf)
 
 ```
+
 
 ```{r}
 # load data
@@ -26,6 +28,8 @@ load("Agrimonia_Dataset_v_3_0_0.Rdata")
 df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
+
+
 
 ```{r}
 
@@ -47,20 +51,24 @@ points(unique_locs$Longitude, unique_locs$Latitude, pch = 19, col = "steelblue")
 df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 
-# Q from Zac: why is this an integer rather than a factor? I guess it probably doesn't make a difference once it's random effect?
-
 ```
+
+
+
 
 ```{r}
 
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
 
-# try using "month-year" as the seasonal t_id, so that we have a unique id for each month and year combination (RW1 might be good here instead of RW2 bc may be more sharp monthly changes)
-
 df$t_id <- as.integer(factor(format(df$Time, "%Y-%m")))
+
+# year–month temporal specification did not provide sufficient support for a structured latent temporal effect at this resolution, leading to convergence issues in INLA for the temporal component. Therefore, specify month id
+
+df$month_id <- as.integer(format(df$Time, "%m"))
 
 
 ```
+
 
 ```{r}
 # create nearest neighbors graph to ensure INLA can identify locations closer to eachother
@@ -78,9 +86,10 @@ nb2INLA("stations.graph", nb)
 g <- inla.read.graph("stations.graph")
 
 
-# Qs from Zac: What/why are you doing here? what is nearest neighbours doing? Is this some kind of alternative to fmesher, creating a mesh?
-
 ```
+
+
+
 
 ```{r}
 
@@ -145,79 +154,200 @@ AIC(fit_lnorm)
 
 ```
 
+
+
+
 ```{r}
-# try fitting bayesian spatio-temporal models with altitude as the covariate
-
-# scale the covariate (altitude)
-df$Altitude_sc <- as.numeric(scale(df$Altitude))
-
-
-ctrl_pred <- list(compute = TRUE, link = 1)
-
-ctrl_comp <- list(
-  dic = TRUE,
-  waic = TRUE,
-  cpo = FALSE,
-  config=TRUE
-)
-
-inla.setOption(num.threads = 8)
-
-# M0: fixed effects only (no spatial/temporal structure)
-m0 <- inla(
-  AQ_pm25 ~ 1 + Altitude_sc,
-  data = df,
-  family = "gamma",
-  control.predictor = ctrl_pred,
-  control.compute = ctrl_comp
-)
-
-# M1: + temporal RW1 trend
-m1 <- inla(
-  AQ_pm25 ~ 1 + Altitude_sc +
-    f(t_id, model = "rw1", constr = TRUE),
-  data = df,
-  family = "gamma",
-  control.predictor = ctrl_pred,
-  control.compute = ctrl_comp
-)
-
-
-# M2: + spatial BYM2 effect
-m2 <- inla(
-  AQ_pm25 ~ 1 + Altitude_sc +
-    f(area_id, model = "bym2", graph = g,
-      scale.model = TRUE, constr = TRUE),
-  data = df,
-  family = "gamma",
-  control.predictor = ctrl_pred,
-  control.compute = ctrl_comp
-)
-
-# M3: full spatio-temporal model
-m3 <- inla(
-  AQ_pm25 ~ 1 + Altitude_sc +
-    f(t_id, model = "rw1", constr = TRUE) +
-    f(area_id, model = "bym2", graph = g,
-      scale.model = TRUE, constr = TRUE),
-  data = df,
-  family = "gamma",
-  control.predictor = ctrl_pred,
-  control.compute = ctrl_comp
-)
-
+# # try fitting bayesian spatio-temporal models with altitude as the covariate
+# 
+# # scale the covariate (altitude)
+# df$Altitude_sc <- as.numeric(scale(df$Altitude))
+# 
+# ctrl_pred <- list(compute = TRUE, link = 1)
+# 
+# ctrl_comp <- list(
+#   dic = TRUE,
+#   waic = TRUE,
+#   cpo = FALSE,
+#   config=TRUE
+# )
+# 
+# inla.setOption(num.threads = 8)
+# 
+# 
+# # M0: fixed effects only (no spatial/temporal structure)
+# m0 <- inla(
+#   AQ_pm25 ~ 1 + Altitude_sc,
+#   data = df,
+#   family = "gamma",
+#   control.predictor = ctrl_pred,
+#   control.compute = ctrl_comp
+# )
+# 
+# # M1: + temporal RW1 trend
+# m1 <- inla(
+#   AQ_pm25 ~ 1 + Altitude_sc +
+#     f(t_id, model = "rw1", constr = TRUE),
+#   data = df,
+#   family = "gamma",
+#   control.predictor = ctrl_pred,
+#   control.compute = ctrl_comp,
+#   verbose = TRUE
+# )
+# 
+# 
+# # M2: + spatial BYM2 effect
+# m2 <- inla(
+#   AQ_pm25 ~ 1 + Altitude_sc +
+#     f(area_id, model = "bym2", graph = g,
+#       scale.model = TRUE, constr = TRUE),
+#   data = df,
+#   family = "gamma",
+#   control.predictor = ctrl_pred,
+#   control.compute = ctrl_comp
+# )
+# 
+# # M3: full spatio-temporal model
+# m3 <- inla(
+#   AQ_pm25 ~ 1 + Altitude_sc +
+#     f(t_id, model = "rw1", constr = TRUE) +
+#     f(area_id, model = "bym2", graph = g,
+#       scale.model = TRUE, constr = TRUE),
+#   data = df,
+#   family = "gamma",
+#   control.predictor = ctrl_pred,
+#   control.compute = ctrl_comp
+# )
+# 
 
 
 ```
+
 
 ```{r}
 # evaluate fits using WAIC
 
-cat("M0 WAIC =",  m0$waic$waic, "\n")
-cat("M1 WAIC =",  m1$waic$waic, "\n")
-cat("M2 WAIC =",  m2$waic$waic, "\n")
-cat("M3 WAIC =",  m3$waic$waic)
-
+# cat("M0 WAIC =",  m0$waic$waic, "\n")
+# cat("M1 WAIC =",  m1$waic$waic, "\n")
+# cat("M2 WAIC =",  m2$waic$waic, "\n")
+# cat("M3 WAIC =",  m3$waic$waic)
+# 
 
 
 ```
+
+
+
+# INLABru
+
+```{r}
+# create the mesh
+statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, 2:1]),
+  convex = -0.05, concave = -0.1,
+  resolution = c(100, 100))
+plot(statdomain)
+
+statmesh <- fmesher::fm_mesh_2d(boundary = statdomain,
+  max.edge = c(2, 2), cutoff = 0.2)
+plot(statmesh)
+points(unique_locs[,2:1], col="red", pch=20)
+
+
+```
+
+
+```{r}
+# fit model
+
+# scale altitude
+df$Altitude_sc <- as.numeric(scale(df$Altitude))
+
+# spatial points
+Locations = data.frame(easting = df$Longitude, northing = df$Latitude) 
+df$geometry <- sf::st_as_sf(Locations, coords = c("easting", "northing"))$geometry
+
+# SPDE model (spde spatial effect)
+loc.spde = inla.spde2.pcmatern(
+  mesh = statmesh,
+  prior.range = c(1, 0.5), 
+  prior.sigma = c(200, 0.1),
+  constr = TRUE
+)
+
+bru_opts <- list(
+  control.family = list(link = "log"),
+  control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+)
+
+# M0: Fixed effects only
+cmp_m0 <- AQ_pm25 ~ 
+  Intercept(1) + 
+  Altitude_sc
+
+m0_bru <- bru(
+  components = cmp_m0,
+  family = "gamma",
+  data = df,
+  options = bru_opts
+)
+
+# M1: Fixed + Temporal effect (rw1)
+cmp_m1 <- AQ_pm25 ~ 
+  Intercept(1) + 
+  Altitude_sc + 
+  f(month_id, model = "rw1", cyclic = TRUE)
+
+m1_bru <- bru(
+  components = cmp_m1,
+  family = "gamma",
+  data = df,
+  options = bru_opts
+)
+
+# M2: Fixed + Spatial effects (SPDE - matern)
+cmp_m2 <- AQ_pm25 ~ 
+  Intercept(1) + 
+  Altitude_sc + 
+  floc(geometry, model = loc.spde)
+
+m2_bru <- bru(
+  components = cmp_m2,
+  family = "gamma",
+  data = df,
+  options = bru_opts
+)
+
+
+# M3: Full spatio-temporal
+cmp_m3 <- AQ_pm25 ~ 
+  Intercept(1) + 
+  Altitude_sc + 
+  f(month_id, model = "rw1", cyclic = TRUE) +
+  floc(geometry, model = loc.spde)
+
+m3_bru <- bru(
+  components = cmp_m3,
+  family = "gamma",
+  data = df,
+  options = bru_opts
+)
+
+
+```
+
+
+```{r}
+# evaluate fits using WAIC
+
+cat("M0 WAIC =",  m0_bru$waic$waic, "\n")
+cat("M1 WAIC =",  m1_bru$waic$waic, "\n")
+cat("M2 WAIC =",  m2_bru$waic$waic, "\n")
+cat("M3 WAIC =",  m3_bru$waic$waic)
+
+
+```
+
+
+
+
+
