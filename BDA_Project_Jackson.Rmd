@@ -16,9 +16,9 @@ library(MASS)
 library(INLA)
 library(inlabru)
 library(sf)
+library(ggplot2)
 
 ```
-
 
 ```{r}
 # load data
@@ -28,8 +28,6 @@ load("Agrimonia_Dataset_v_3_0_0.Rdata")
 df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
-
-
 
 ```{r}
 
@@ -53,9 +51,6 @@ df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 ```
 
-
-
-
 ```{r}
 
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
@@ -68,7 +63,6 @@ df$month_id <- as.integer(format(df$Time, "%m"))
 
 
 ```
-
 
 ```{r}
 # create nearest neighbors graph to ensure INLA can identify locations closer to eachother
@@ -87,9 +81,6 @@ g <- inla.read.graph("stations.graph")
 
 
 ```
-
-
-
 
 ```{r}
 
@@ -153,9 +144,6 @@ AIC(fit_lnorm)
 # go with gamma (lower AIC and better visual fit)
 
 ```
-
-
-
 
 ```{r}
 # # try fitting bayesian spatio-temporal models with altitude as the covariate
@@ -223,7 +211,6 @@ AIC(fit_lnorm)
 
 ```
 
-
 ```{r}
 # evaluate fits using WAIC
 
@@ -236,8 +223,6 @@ AIC(fit_lnorm)
 
 ```
 
-
-
 # INLABru
 
 ```{r}
@@ -248,13 +233,12 @@ statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, 2:1]),
 plot(statdomain)
 
 statmesh <- fmesher::fm_mesh_2d(boundary = statdomain,
-  max.edge = c(2, 2), cutoff = 0.2)
+  max.edge = c(0.2, 0.2), cutoff = 0.2)
 plot(statmesh)
 points(unique_locs[,2:1], col="red", pch=20)
 
 
 ```
-
 
 ```{r}
 # fit model
@@ -335,7 +319,6 @@ m3_bru <- bru(
 
 ```
 
-
 ```{r}
 # evaluate fits using WAIC
 
@@ -347,7 +330,35 @@ cat("M3 WAIC =",  m3_bru$waic$waic)
 
 ```
 
+```{r}
+# visualise the random effects
+
+meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+
+
+# (M1) Temporal random effect
+plot(m1_bru$summary.random$f$mean, type="l")
+
+# (M3) Temporal random effect
+plot(m3_bru$summary.random$ftime$mean, type="l")
+
+# (M2) Spatial random effect
+ggplot(meshlocs, aes(x = lon, y = lat, color = m2_bru$summary.random$floc$mean)) +
+  geom_point(size = 2) +
+  scale_color_viridis_c() +
+  coord_equal() +
+  theme_minimal()
+
+# (M3) Spatial random effect
+ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean)) +
+  geom_point(size = 2) +
+  scale_color_viridis_c() +
+  coord_equal() +
+  theme_minimal()
 
 
 
 
+
+
+```
