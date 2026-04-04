@@ -242,69 +242,314 @@ cat("M3 WAIC =",  m3_bru$waic$waic)
 
 ### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
 
+
 ```{r}
-# β (Intercept + covariates):
-# beta_priors <- list(
-#   A = list(mean = 0, prec = 1e-6),
-#   B = list(mean = 0, prec = 1e-3),
-#   C = list(mean = 0, prec = 1e-2))
-# 
-# models <- list()
-# for (p in names(beta_priors)) {
-#   beta_prior <- beta_priors[[p]]
-#   cmp <- AQ_pm25 ~
-#     Intercept(1, prior = beta_prior) +
-#     LI_bovine_v2_sc(prior = beta_prior) +
-#     LI_pigs_v2_sc(prior = beta_prior) +
-#     f(month_id, model = "rw1", cyclic=TRUE) +
-#     floc(geometry, model = loc.spde)
-#   models[[p]] <- bru(
-#     components = cmp,
-#     family = "gamma",
-#     data = df
-#   )
-# }
+# Fixed effects - β (Intercept + covariates):
+
+fit_fixed_prior <- function(prec) {
+  cmp <- AQ_pm25 ~ 
+    Intercept(1,
+            mean.linear = 0,
+            prec.linear = prec) + 
+  LI_bovine_v2_sc(LI_bovine_v2_sc,
+                  mean.linear = 0,
+                  prec.linear = prec) +       
+  LI_pigs_v2_sc(LI_pigs_v2_sc,
+                mean.linear = 0,
+                prec.linear = prec) +      
+  f(month_id, model = "rw1", cyclic = TRUE) +
+  floc(geometry, model = loc.spde)
+  
+  bru(
+    components = cmp,
+    family = "lognormal",
+    data = df,
+    options = bru_opts
+  )
+}
+
+m3_fixed_vague  <- fit_fixed_prior(0.001) # very vague
+m3_fixed_mod    <- fit_fixed_prior(1) # moderate
+m3_fixed_tight  <- fit_fixed_prior(10) # tight
+
+# Compare priors
+extract_marginal <- function(model, param, label) {
+  marg <- as.data.frame(model$marginals.fixed[[param]])
+  marg$prior_spec <- label
+  marg
+}
+
+all_params <- c("Intercept", "LI_bovine_v2_sc", "LI_pigs_v2_sc")
+
+all_marginals <- bind_rows(
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_vague, p, "Vague")),
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_mod,   p, "Moderate")),
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_tight, p, "Tight"))
+) %>%
+  mutate(param = rep(rep(all_params, each = nrow(m3_fixed_vague$marginals.fixed[[1]])), 3))
+
+ggplot(all_marginals, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ param, scales = "free") +
+  labs(title = "Prior sensitivity: fixed effects",
+       x = "Coefficient value", y = "Posterior density",
+       colour = "Prior spec") +
+  theme_minimal()
+
 
 
 ```
+
+The vague and weakly informative priors produced near-identical posterior distributions, indicating that the data are sufficiently informative to dominate prior specification across a reasonable range. The tight prior (precision = 10, SD ≈ 0.32) produced noticeably different posteriors, particularly for the intercept, suggesting this specification is overly restrictive given the scale of the standardised covariates. In the absence of strong domain knowledge regarding the expected magnitude of livestock density effects on PM2.5, a moderate prior (precision = 1, SD = 1) was selected for all fixed effects going forward, providing mild regularisation while allowing the data to drive inference.
 
 
 ```{r}
 # Temporal effect (RW1 precision)
 
 
+fit_rw1_prior <- function(u, alpha, label) {
+  rw1_hyper <- list(prec = list(prior = "pc.prec", param = c(u, alpha)))
+  
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
+    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE, hyper = rw1_hyper) +
+    floc(geometry, model = loc.spde)
+  
+  bru(components = cmp, family = "lognormal",
+      data = df, options = bru_opts)
+}
 
+m3_rw1_smooth <- fit_rw1_prior(u = 0.1, alpha = 0.01, label = "Smooth")    # 1% chance month-to-month jumps exceed ~10% change in PM2.5
+m3_rw1_mod    <- fit_rw1_prior(u = 1,   alpha = 0.01, label = "Moderate")  # 1% chance jumps exceed ~170% change — allows real seasonal variation
+m3_rw1_flex <- fit_rw1_prior(u = 10, alpha = 0.01, label = "Flexible")  # 1% chance jumps exceed 10 on log scale — no meaningful constraint on seasonal variation
 
+# Extract posterior mean and credible interval for each month
+extract_rw1 <- function(model, label) {
+  rw1 <- model$summary.random$f
+  rw1$prior_spec <- label
+  rw1
+}
+
+rw1_sens <- bind_rows(
+  extract_rw1(m3_rw1_smooth, "Smooth"),
+  extract_rw1(m3_rw1_mod,    "Moderate"),
+  extract_rw1(m3_rw1_flex,   "Flexible")
+)
+
+ggplot(rw1_sens, aes(x = ID, y = mean, colour = prior_spec,
+                      fill = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  geom_ribbon(aes(ymin = `0.025quant`, ymax = `0.975quant`),
+              alpha = 0.2, colour = NA) +
+  labs(title = "Prior sensitivity: RW1 temporal effect",
+       x = "Month", y = "Effect (log scale)",
+       colour = "Prior spec", fill = "Prior spec") +
+  scale_x_continuous(breaks = 1:12,
+                     labels = month.abb) +
+  theme_minimal()
 
 
 ```
 
+All three prior specifications — smooth (u = 0.1), moderate (u = 1), and flexible (u = 10) — produced near-identical posterior seasonal curves, indicating that the data are sufficiently informative to determine the shape and magnitude of the temporal effect regardless of how strongly the prior constrains month-to-month variation. This is reassuring as it suggests the seasonal pattern in PM2.5 is a genuine signal in the data rather than an artefact of prior specification. Going forward, the moderate prior (u = 1, alpha = 0.01) was selected, as it represents a sensible default that places a weak but not negligible constraint on temporal variation — allowing meaningful seasonal fluctuation while providing mild regularisation — without requiring strong domain knowledge about the exact smoothness of the seasonal cycle.
 
 
 ```{r}
 # Spatial effect (SPDE: ρ, σ)
 
+fit_spde_prior <- function(range0, Prange, sigma0, Psigma, label) {
+  spde <- inla.spde2.pcmatern(
+    mesh        = statmesh,
+    prior.range = c(range0, Prange),
+    prior.sigma = c(sigma0, Psigma),
+    constr=TRUE
+  )
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
+    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE,
+      hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+    floc(geometry, model = spde)
+  
+  bru(components = cmp, family = "lognormal",
+      data = df, options = bru_opts)
+}
+
+m3_spde_vague  <- fit_spde_prior(0.1, 0.5, 5, 0.5, "Vague") # range median ~10km, large spatial variance allowed variation
+m3_spde_mod    <- fit_spde_prior(1,   0.5, 1,   0.5, "Moderate") # range median ~100km, roughly a third of domain width
+m3_spde_tight  <- fit_spde_prior(3,   0.9, 0.5, 0.5, "Tight") # 90% chance range < 300km, modest spatial variance
+# Psigma = 0.5 ->  treat sigma0 as the prior median for sigma in each scenario
+
+
+extract_spde_marginal <- function(model, param_name, label) {
+  marg <- as.data.frame(
+    inla.smarginal(model$marginals.hyperpar[[param_name]])
+  )
+  marg$prior_spec <- label
+  marg
+}
+
+range_sens <- bind_rows(
+  extract_spde_marginal(m3_spde_vague, "Range for floc", "Vague"),
+  extract_spde_marginal(m3_spde_mod,   "Range for floc", "Moderate"),
+  extract_spde_marginal(m3_spde_tight, "Range for floc", "Tight")
+)
+
+ggplot(range_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(title = "Sensitivity: SPDE range",
+       x = "Range (degrees)", y = "Posterior density",
+       colour = "Prior spec") +
+  theme_minimal()
+
+sigma_sens <- bind_rows(
+  extract_spde_marginal(m3_spde_vague, "Stdev for floc", "Vague"),
+  extract_spde_marginal(m3_spde_mod,   "Stdev for floc", "Moderate"),
+  extract_spde_marginal(m3_spde_tight, "Stdev for floc", "Tight")
+)
+
+ggplot(sigma_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(title = "Sensitivity: SPDE sigma",
+       x = "Sigma", y = "Posterior density",
+       colour = "Prior spec") +
+  theme_minimal()
+
 
 
 
 ```
 
+There is greater prior sensitivity than observed for the fixed effects or temporal component, particularly for the range parameter. The vague prior allowed the range to collapse toward very short distances inconsistent with the spatial scale of the domain, while the moderate and tight priors produced more stable and interpretable posteriors. For sigma, all three specifications concentrated around similar values (~0.8–0.9), however the moderate prior produced a notably tighter posterior, suggesting the moderate sigma prior (median = 1) is well-aligned with the signal in the data, while the vague and tight specifications introduced unnecessary additional uncertainty. Given the absence of strong domain knowledge, the moderate prior (range median ~100km, sigma median = 1) was selected as it produced well-identified posteriors for both parameters without unduly constraining the spatial field, and reflects a reasonable belief that spatial correlation in PM2.5 operates at a regional rather than hyper-local scale across the study domain
 
 
 ```{r}
 # Log-normal likelihood precision
 
+fit_likelihood_prior <- function(u, alpha, label) {
+  spde <- inla.spde2.pcmatern(
+    mesh        = statmesh,
+    prior.range = c(1, 0.5),
+    prior.sigma = c(1, 0.5),
+    constr      = TRUE
+  )
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
+    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE,
+      hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+    floc(geometry, model = spde)
+  bru(
+    components = cmp,
+    family     = "lognormal",
+    data       = df,
+    options    = list(
+      control.family  = list(
+        hyper = list(
+          prec = list(prior = "pc.prec", param = c(u, alpha))
+        )
+      ),
+      control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+    )
+  )
+}
 
+
+# posterior precision ~2.67 → residual SD ≈ 1/sqrt(2.67) ≈ 0.61
+m3_bru$summary.hyperpar["Precision for the lognormal observations", ]
+
+m3_lik_vague  <- fit_likelihood_prior(u = 10,  alpha = 0.01, label = "Vague")    # essentially flat — well above posterior SD of 0.61
+m3_lik_mod    <- fit_likelihood_prior(u = 1,   alpha = 0.01, label = "Moderate") # mild constraint, brackets posterior from above
+m3_lik_tight  <- fit_likelihood_prior(u = 0.3, alpha = 0.01, label = "Tight")    # deliberately below posterior SD — tests if data dominate
+
+
+# extract marginals
+extract_lik_marginal <- function(model, label) {
+  marg <- as.data.frame(
+    inla.smarginal(
+      model$marginals.hyperpar[["Precision for the lognormal observations"]]
+    )
+  )
+  marg$prior_spec <- label
+  marg
+}
+
+lik_sens <- bind_rows(
+  extract_lik_marginal(m3_lik_vague,  "Vague"),
+  extract_lik_marginal(m3_lik_mod,    "Moderate"),
+  extract_lik_marginal(m3_lik_tight,  "Tight")
+)
+
+# plot
+ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(title = "Sensitivity: lognormal likelihood precision",
+       x = "Precision", y = "Posterior density",
+       colour = "Prior spec") +
+  theme_minimal()
 
 ```
+
+
+All three prior specifications — vague (u = 10), moderate (u = 1), and tight (u = 0.3) — produced near-identical posterior distributions, indicating that the data are sufficiently informative about the residual variance to dominate prior specification across the range tested. Given this robustness, the moderate prior (u = 1) was selected going forward as it provides mild regularisation without being overly restrictive, and reflects a reasonable belief that residual variation in log PM2.5 is unlikely to exceed 1 on the log scale while still allowing the data to drive the posterior entirely.
+
 
 
 
 ```{r}
-# Joint sensitivity
+# Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
+
+# final SPDE with chosen priors
+loc.spde <- inla.spde2.pcmatern(
+  mesh        = statmesh,
+  prior.range = c(1, 0.5),
+  prior.sigma = c(1, 0.5),
+  constr      = TRUE
+)
+
+cmp_m3 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  LI_bovine_v2_sc(LI_bovine_v2_sc,
+                  mean.linear = 0, prec.linear = 1) +
+  LI_pigs_v2_sc(LI_pigs_v2_sc,
+                mean.linear = 0, prec.linear = 1) +
+  f(month_id, model = "rw1", cyclic = TRUE,
+    hyper = list(prec = list(prior = "pc.prec",
+                             param = c(1, 0.01)))) +
+  floc(geometry, model = loc.spde)
+
+m3_revised <- bru(
+  components = cmp_m3,
+  family     = "lognormal",
+  data       = df,
+  options    = list(
+    control.family  = list(
+      hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.01))
+      )
+    ),
+    control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+  )
+)
+
 
 
 ```
+
+
+Remarks:
+-All priors were chosen empirically through sensitivity analysis rather than arbitrarily
+-The moderate specification was selected consistently across all components, reflecting a principled philosophy of mild regularisation without domain knowledge
+-Where posteriors were robust across specs (fixed effects, RW1, likelihood precision), the moderate prior is defensible simply as a sensible default
+-Where posteriors were sensitive (SPDE range and sigma), the moderate prior was selected for producing the most stable and interpretable posteriors
 
 
 # Visualise the random effects
