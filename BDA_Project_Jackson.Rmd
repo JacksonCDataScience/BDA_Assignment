@@ -20,6 +20,9 @@ library(ggplot2)
 
 ```
 
+
+### Data pre-processing
+
 ```{r}
 # load data
 
@@ -29,8 +32,9 @@ df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
 
-```{r}
 
+
+```{r}
 # create area_id column for spatial component (latent random effect)
 
 
@@ -51,8 +55,10 @@ df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 ```
 
-```{r}
 
+
+
+```{r}
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
 
 df$t_id <- as.integer(factor(format(df$Time, "%Y-%m")))
@@ -64,27 +70,11 @@ df$month_id <- as.integer(format(df$Time, "%m"))
 
 ```
 
-```{r}
-# create nearest neighbors graph to ensure INLA can identify locations closer to eachother
-
-# get unique locations ordered by area_id
-unique_locs <- unique(df[order(df$area_id), 
-                                       c("area_id", "Latitude", "Longitude")])
-
-# build kNN neighbourhood graph
-coords <- as.matrix(unique_locs[, c("Longitude", "Latitude")])
-nb <- knn2nb(knearneigh(coords, k = 5))
-
-# write and read INLA graph
-nb2INLA("stations.graph", nb)
-g <- inla.read.graph("stations.graph")
 
 
-```
+### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -> air quality pm 2.5)
 
 ```{r}
-
-# investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -> air quality pm 2.5)
 
 summary(df$AQ_pm25) # lots of missing PM2.5 values
 sum(df$AQ_pm25 == 0, na.rm = TRUE) # a few 0 values (also imply missing as 0 concentraiton is basically impossible)
@@ -98,136 +88,44 @@ complete_case_df <- df[!is.na(df$AQ_pm25), ]
 # raw
 hist(complete_case_df$AQ_pm25, freq = FALSE, main = "Raw")
 
-# log transformed
-hist(log(complete_case_df$AQ_pm25), breaks=100, freq = FALSE, main = "Log")
+# try fitting with log-normal
 
-# square root transformed (suggests gamma)
-hist(sqrt(complete_case_df$AQ_pm25), freq = FALSE, main = "Square Root")
-
-# try fitting with log-normal and gamma
-
-# fit both distributions
-fit_gamma <- fitdistr(complete_case_df$AQ_pm25, "gamma")
-shape    <- fit_gamma$estimate["shape"]
-rate     <- fit_gamma$estimate["rate"]
-
+# fit
 fit_lnorm <- fitdistr(complete_case_df$AQ_pm25, "lognormal")
 meanlog   <- fit_lnorm$estimate["meanlog"]
 sdlog     <- fit_lnorm$estimate["sdlog"]
 
 # plot histogram
 hist(complete_case_df$AQ_pm25, freq = FALSE,
-     main = "PM2.5 with Gamma and Log-Normal Overlay",
+     main = "PM2.5 with Log-Normal Overlay",
      xlab = "PM2.5 Concentration",
      col = "lightblue", border = "white",
      ylim = c(0, 0.05))
 
-# overlay both density lines
+# overlay density
 x_seq <- seq(0, max(complete_case_df$AQ_pm25), length.out = 500)
-lines(x_seq, dgamma(x_seq, shape = shape, rate = rate),
-      col = "red", lwd = 2)
 lines(x_seq, dlnorm(x_seq, meanlog = meanlog, sdlog = sdlog),
       col = "darkgreen", lwd = 2)
-
 legend("topright", 
-       legend = c("Observed", "Gamma", "Log-Normal"),
+       legend = c("Observed","Log-Normal"),
        fill   = c("lightblue", NA, NA),
-       lty    = c(NA, 1, 1),
-       col    = c("lightblue", "red", "darkgreen"),
-       lwd    = c(NA, 2, 2))
+       lty    = c(NA, 1),
+       col    = c("lightblue", "red"),
+       lwd    = c(NA, 2))
 
 
 # evaluate fit with AIC
-AIC(fit_gamma)
 AIC(fit_lnorm)
 
-# go with gamma (lower AIC and better visual fit)
 
 ```
 
-```{r}
-# # try fitting bayesian spatio-temporal models with altitude as the covariate
-# 
-# # scale the covariate (altitude)
-# df$Altitude_sc <- as.numeric(scale(df$Altitude))
-# 
-# ctrl_pred <- list(compute = TRUE, link = 1)
-# 
-# ctrl_comp <- list(
-#   dic = TRUE,
-#   waic = TRUE,
-#   cpo = FALSE,
-#   config=TRUE
-# )
-# 
-# inla.setOption(num.threads = 8)
-# 
-# 
-# # M0: fixed effects only (no spatial/temporal structure)
-# m0 <- inla(
-#   AQ_pm25 ~ 1 + Altitude_sc,
-#   data = df,
-#   family = "gamma",
-#   control.predictor = ctrl_pred,
-#   control.compute = ctrl_comp
-# )
-# 
-# # M1: + temporal RW1 trend
-# m1 <- inla(
-#   AQ_pm25 ~ 1 + Altitude_sc +
-#     f(t_id, model = "rw1", constr = TRUE),
-#   data = df,
-#   family = "gamma",
-#   control.predictor = ctrl_pred,
-#   control.compute = ctrl_comp,
-#   verbose = TRUE
-# )
-# 
-# 
-# # M2: + spatial BYM2 effect
-# m2 <- inla(
-#   AQ_pm25 ~ 1 + Altitude_sc +
-#     f(area_id, model = "bym2", graph = g,
-#       scale.model = TRUE, constr = TRUE),
-#   data = df,
-#   family = "gamma",
-#   control.predictor = ctrl_pred,
-#   control.compute = ctrl_comp
-# )
-# 
-# # M3: full spatio-temporal model
-# m3 <- inla(
-#   AQ_pm25 ~ 1 + Altitude_sc +
-#     f(t_id, model = "rw1", constr = TRUE) +
-#     f(area_id, model = "bym2", graph = g,
-#       scale.model = TRUE, constr = TRUE),
-#   data = df,
-#   family = "gamma",
-#   control.predictor = ctrl_pred,
-#   control.compute = ctrl_comp
-# )
-# 
+### Create the mesh
 
-
-```
 
 ```{r}
-# evaluate fits using WAIC
 
-# cat("M0 WAIC =",  m0$waic$waic, "\n")
-# cat("M1 WAIC =",  m1$waic$waic, "\n")
-# cat("M2 WAIC =",  m2$waic$waic, "\n")
-# cat("M3 WAIC =",  m3$waic$waic)
-# 
-
-
-```
-
-# INLABru
-
-```{r}
-# create the mesh
-statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, 2:1]),
+statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, c("Longitude", "Latitude")]),
   convex = -0.05, concave = -0.1,
   resolution = c(100, 100))
 plot(statdomain)
@@ -235,42 +133,45 @@ plot(statdomain)
 statmesh <- fmesher::fm_mesh_2d(boundary = statdomain,
   max.edge = c(0.2, 0.2), cutoff = 0.2)
 plot(statmesh)
-points(unique_locs[,2:1], col="red", pch=20)
-
+points(unique_locs[, c("Longitude", "Latitude")], col="red", pch=20)
 
 ```
+### Fit models
 
 ```{r}
-# fit model
 
-# scale altitude
-df$Altitude_sc <- as.numeric(scale(df$Altitude))
+# scale covariates
+df$LI_bovine_v2_sc <- as.numeric(scale(df$LI_bovine_v2))
+df$LI_pigs_v2_sc <- as.numeric(scale(df$LI_pigs_v2))
+
 
 # spatial points
 Locations = data.frame(easting = df$Longitude, northing = df$Latitude) 
 df$geometry <- sf::st_as_sf(Locations, coords = c("easting", "northing"))$geometry
 
-# SPDE model (spde spatial effect)
+# SPDE model (spde spatial effect) -> specifying the priors for spatial effect (the only-non default priors for now)
 loc.spde = inla.spde2.pcmatern(
   mesh = statmesh,
-  prior.range = c(1, 0.5), 
-  prior.sigma = c(200, 0.1),
+  prior.range = c(1, 0.5),
+  prior.sigma = c(1, 0.5),
   constr = TRUE
 )
 
 bru_opts <- list(
-  control.family = list(link = "log"),
+  # control.family = list(link = "log"), # doesnt work with lognormal
   control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
 )
+
 
 # M0: Fixed effects only
 cmp_m0 <- AQ_pm25 ~ 
   Intercept(1) + 
-  Altitude_sc
+  LI_bovine_v2_sc +
+  LI_pigs_v2_sc
 
 m0_bru <- bru(
   components = cmp_m0,
-  family = "gamma",
+  family = "lognormal",
   data = df,
   options = bru_opts
 )
@@ -278,12 +179,13 @@ m0_bru <- bru(
 # M1: Fixed + Temporal effect (rw1)
 cmp_m1 <- AQ_pm25 ~ 
   Intercept(1) + 
-  Altitude_sc + 
+  LI_bovine_v2_sc +
+  LI_pigs_v2_sc + 
   f(month_id, model = "rw1", cyclic = TRUE)
 
 m1_bru <- bru(
   components = cmp_m1,
-  family = "gamma",
+  family = "lognormal",
   data = df,
   options = bru_opts
 )
@@ -291,12 +193,13 @@ m1_bru <- bru(
 # M2: Fixed + Spatial effects (SPDE - matern)
 cmp_m2 <- AQ_pm25 ~ 
   Intercept(1) + 
-  Altitude_sc + 
+  LI_bovine_v2_sc +
+  LI_pigs_v2_sc + 
   floc(geometry, model = loc.spde)
 
 m2_bru <- bru(
   components = cmp_m2,
-  family = "gamma",
+  family = "lognormal",
   data = df,
   options = bru_opts
 )
@@ -305,56 +208,158 @@ m2_bru <- bru(
 # M3: Full spatio-temporal
 cmp_m3 <- AQ_pm25 ~ 
   Intercept(1) + 
-  Altitude_sc + 
+  LI_bovine_v2_sc +
+  LI_pigs_v2_sc + 
   f(month_id, model = "rw1", cyclic = TRUE) +
   floc(geometry, model = loc.spde)
 
 m3_bru <- bru(
   components = cmp_m3,
-  family = "gamma",
+  family = "lognormal",
   data = df,
   options = bru_opts
 )
 
 
+
 ```
 
-```{r}
-# evaluate fits using WAIC
 
+### Model comparison and selection
+
+
+```{r}
+# model comparison and selection
+
+# WAIC -> balanced model fit and complexity
 cat("M0 WAIC =",  m0_bru$waic$waic, "\n")
 cat("M1 WAIC =",  m1_bru$waic$waic, "\n")
 cat("M2 WAIC =",  m2_bru$waic$waic, "\n")
 cat("M3 WAIC =",  m3_bru$waic$waic)
 
+# -> select full spatio-temporal model
+```
+
+### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
+
+```{r}
+# β (Intercept + covariates):
+# beta_priors <- list(
+#   A = list(mean = 0, prec = 1e-6),
+#   B = list(mean = 0, prec = 1e-3),
+#   C = list(mean = 0, prec = 1e-2))
+# 
+# models <- list()
+# for (p in names(beta_priors)) {
+#   beta_prior <- beta_priors[[p]]
+#   cmp <- AQ_pm25 ~
+#     Intercept(1, prior = beta_prior) +
+#     LI_bovine_v2_sc(prior = beta_prior) +
+#     LI_pigs_v2_sc(prior = beta_prior) +
+#     f(month_id, model = "rw1", cyclic=TRUE) +
+#     floc(geometry, model = loc.spde)
+#   models[[p]] <- bru(
+#     components = cmp,
+#     family = "gamma",
+#     data = df
+#   )
+# }
+
 
 ```
 
+
 ```{r}
-# visualise the random effects
-
-meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+# Temporal effect (RW1 precision)
 
 
-# (M1) Temporal random effect
-plot(m1_bru$summary.random$f$mean, type="l")
 
-# (M3) Temporal random effect
-plot(m3_bru$summary.random$ftime$mean, type="l")
 
-# (M2) Spatial random effect
-ggplot(meshlocs, aes(x = lon, y = lat, color = m2_bru$summary.random$floc$mean)) +
-  geom_point(size = 2) +
-  scale_color_viridis_c() +
-  coord_equal() +
-  theme_minimal()
 
-# (M3) Spatial random effect
+
+```
+
+
+
+```{r}
+# Spatial effect (SPDE: ρ, σ)
+
+
+
+
+```
+
+
+
+```{r}
+# Log-normal likelihood precision
+
+
+
+```
+
+
+
+```{r}
+# Joint sensitivity
+
+
+```
+
+
+# Visualise the random effects
+
+```{r}
+
+# Zac's
+# meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+# 
+# # (M1) Temporal random effect
+# plot(m1_bru$summary.random$f$mean, type="l")
+# 
+# # (M3) Temporal random effect
+# plot(m3_bru$summary.random$ftime$mean, type="l")
+# 
+# # (M2) Spatial random effect
+# ggplot(meshlocs, aes(x = lon, y = lat, color = m2_bru$summary.random$floc$mean)) +
+#   geom_point(size = 2) +
+#   scale_color_viridis_c() +
+#   coord_equal() +
+#   theme_minimal()
+# 
+# # (M3) Spatial random effect
+# ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean)) +
+#   geom_point(size = 2) +
+#   scale_color_viridis_c() +
+#   coord_equal() +
+#   theme_minimal()
+
+
+# Jackson's
+
+# temporal (M3)
+plot(m3_bru$summary.random$f$mean, type = "l",
+     main = "M3: Temporal Random Effect",
+     xlab = "Time index",
+     ylab = "Effect (mean)")
+
+# spatial (M3)
 ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean)) +
   geom_point(size = 2) +
   scale_color_viridis_c() +
   coord_equal() +
-  theme_minimal()
+  theme_minimal() +
+  labs(title = "M3: Spatial Random Effect",
+       color = "Effect")
+
+```
+
+
+
+### Convergence diagnostics
+
+```{r}
+
 
 
 
@@ -362,3 +367,20 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean))
 
 
 ```
+
+
+### Global diagnostics of chosen model (CRPS, PPP values)
+
+```{r}
+
+
+
+
+
+```
+
+
+
+
+
+
