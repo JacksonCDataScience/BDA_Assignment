@@ -20,7 +20,6 @@ library(ggplot2)
 
 ```
 
-
 ### Data pre-processing
 
 ```{r}
@@ -31,8 +30,6 @@ load("Agrimonia_Dataset_v_3_0_0.Rdata")
 df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
-
-
 
 ```{r}
 # create area_id column for spatial component (latent random effect)
@@ -55,9 +52,6 @@ df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 ```
 
-
-
-
 ```{r}
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
 
@@ -70,9 +64,7 @@ df$month_id <- as.integer(format(df$Time, "%m"))
 
 ```
 
-
-
-### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -> air quality pm 2.5)
+### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -\> air quality pm 2.5)
 
 ```{r}
 
@@ -122,7 +114,6 @@ AIC(fit_lnorm)
 
 ### Create the mesh
 
-
 ```{r}
 
 statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, c("Longitude", "Latitude")]),
@@ -136,6 +127,7 @@ plot(statmesh)
 points(unique_locs[, c("Longitude", "Latitude")], col="red", pch=20)
 
 ```
+
 ### Fit models
 
 ```{r}
@@ -224,9 +216,7 @@ m3_bru <- bru(
 
 ```
 
-
 ### Model comparison and selection
-
 
 ```{r}
 # model comparison and selection
@@ -241,7 +231,6 @@ cat("M3 WAIC =",  m3_bru$waic$waic)
 ```
 
 ### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
-
 
 ```{r}
 # Fixed effects - β (Intercept + covariates):
@@ -303,8 +292,17 @@ ggplot(all_marginals, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-The vague and weakly informative priors produced near-identical posterior distributions, indicating that the data are sufficiently informative to dominate prior specification across a reasonable range. The tight prior (precision = 10, SD ≈ 0.32) produced noticeably different posteriors, particularly for the intercept, suggesting this specification is overly restrictive given the scale of the standardised covariates. In the absence of strong domain knowledge regarding the expected magnitude of livestock density effects on PM2.5, a moderate prior (precision = 1, SD = 1) was selected for all fixed effects going forward, providing mild regularisation while allowing the data to drive inference.
-
+The vague and weakly informative priors produced near-identical
+posterior distributions, indicating that the data are sufficiently
+informative to dominate prior specification across a reasonable range.
+The tight prior (precision = 10, SD ≈ 0.32) produced noticeably
+different posteriors, particularly for the intercept, suggesting this
+specification is overly restrictive given the scale of the standardised
+covariates. In the absence of strong domain knowledge regarding the
+expected magnitude of livestock density effects on PM2.5, a moderate
+prior (precision = 1, SD = 1) was selected for all fixed effects going
+forward, providing mild regularisation while allowing the data to drive
+inference.
 
 ```{r}
 # Temporal effect (RW1 precision)
@@ -356,8 +354,18 @@ ggplot(rw1_sens, aes(x = ID, y = mean, colour = prior_spec,
 
 ```
 
-All three prior specifications — smooth (u = 0.1), moderate (u = 1), and flexible (u = 10) — produced near-identical posterior seasonal curves, indicating that the data are sufficiently informative to determine the shape and magnitude of the temporal effect regardless of how strongly the prior constrains month-to-month variation. This is reassuring as it suggests the seasonal pattern in PM2.5 is a genuine signal in the data rather than an artefact of prior specification. Going forward, the moderate prior (u = 1, alpha = 0.01) was selected, as it represents a sensible default that places a weak but not negligible constraint on temporal variation — allowing meaningful seasonal fluctuation while providing mild regularisation — without requiring strong domain knowledge about the exact smoothness of the seasonal cycle.
-
+All three prior specifications — smooth (u = 0.1), moderate (u = 1), and
+flexible (u = 10) — produced near-identical posterior seasonal curves,
+indicating that the data are sufficiently informative to determine the
+shape and magnitude of the temporal effect regardless of how strongly
+the prior constrains month-to-month variation. This is reassuring as it
+suggests the seasonal pattern in PM2.5 is a genuine signal in the data
+rather than an artefact of prior specification. Going forward, the
+moderate prior (u = 1, alpha = 0.01) was selected, as it represents a
+sensible default that places a weak but not negligible constraint on
+temporal variation — allowing meaningful seasonal fluctuation while
+providing mild regularisation — without requiring strong domain
+knowledge about the exact smoothness of the seasonal cycle.
 
 ```{r}
 # Spatial effect (SPDE: ρ, σ)
@@ -426,8 +434,22 @@ ggplot(sigma_sens, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-There is greater prior sensitivity than observed for the fixed effects or temporal component, particularly for the range parameter. The vague prior allowed the range to collapse toward very short distances inconsistent with the spatial scale of the domain, while the moderate and tight priors produced more stable and interpretable posteriors. For sigma, all three specifications concentrated around similar values (~0.8–0.9), however the moderate prior produced a notably tighter posterior, suggesting the moderate sigma prior (median = 1) is well-aligned with the signal in the data, while the vague and tight specifications introduced unnecessary additional uncertainty. Given the absence of strong domain knowledge, the moderate prior (range median ~100km, sigma median = 1) was selected as it produced well-identified posteriors for both parameters without unduly constraining the spatial field, and reflects a reasonable belief that spatial correlation in PM2.5 operates at a regional rather than hyper-local scale across the study domain
-
+There is greater prior sensitivity than observed for the fixed effects
+or temporal component, particularly for the range parameter. The vague
+prior allowed the range to collapse toward very short distances
+inconsistent with the spatial scale of the domain, while the moderate
+and tight priors produced more stable and interpretable posteriors. For
+sigma, all three specifications concentrated around similar values
+(\~0.8–0.9), however the moderate prior produced a notably tighter
+posterior, suggesting the moderate sigma prior (median = 1) is
+well-aligned with the signal in the data, while the vague and tight
+specifications introduced unnecessary additional uncertainty. Given the
+absence of strong domain knowledge, the moderate prior (range median
+\~100km, sigma median = 1) was selected as it produced well-identified
+posteriors for both parameters without unduly constraining the spatial
+field, and reflects a reasonable belief that spatial correlation in
+PM2.5 operates at a regional rather than hyper-local scale across the
+study domain
 
 ```{r}
 # Log-normal likelihood precision
@@ -497,11 +519,15 @@ ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-
-All three prior specifications — vague (u = 10), moderate (u = 1), and tight (u = 0.3) — produced near-identical posterior distributions, indicating that the data are sufficiently informative about the residual variance to dominate prior specification across the range tested. Given this robustness, the moderate prior (u = 1) was selected going forward as it provides mild regularisation without being overly restrictive, and reflects a reasonable belief that residual variation in log PM2.5 is unlikely to exceed 1 on the log scale while still allowing the data to drive the posterior entirely.
-
-
-
+All three prior specifications — vague (u = 10), moderate (u = 1), and
+tight (u = 0.3) — produced near-identical posterior distributions,
+indicating that the data are sufficiently informative about the residual
+variance to dominate prior specification across the range tested. Given
+this robustness, the moderate prior (u = 1) was selected going forward
+as it provides mild regularisation without being overly restrictive, and
+reflects a reasonable belief that residual variation in log PM2.5 is
+unlikely to exceed 1 on the log scale while still allowing the data to
+drive the posterior entirely.
 
 ```{r}
 # Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
@@ -544,13 +570,15 @@ m3_revised <- bru(
 
 ```
 
-
-Remarks:
--All priors were chosen empirically through sensitivity analysis rather than arbitrarily
--The moderate specification was selected consistently across all components, reflecting a principled philosophy of mild regularisation without domain knowledge
--Where posteriors were robust across specs (fixed effects, RW1, likelihood precision), the moderate prior is defensible simply as a sensible default
--Where posteriors were sensitive (SPDE range and sigma), the moderate prior was selected for producing the most stable and interpretable posteriors
-
+Remarks: -All priors were chosen empirically through sensitivity
+analysis rather than arbitrarily -The moderate specification was
+selected consistently across all components, reflecting a principled
+philosophy of mild regularisation without domain knowledge -Where
+posteriors were robust across specs (fixed effects, RW1, likelihood
+precision), the moderate prior is defensible simply as a sensible
+default -Where posteriors were sensitive (SPDE range and sigma), the
+moderate prior was selected for producing the most stable and
+interpretable posteriors
 
 # Visualise the random effects
 
@@ -597,9 +625,18 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean))
   labs(title = "M3: Spatial Random Effect",
        color = "Effect")
 
+
+# Zac's updated (spatial only)
+
+pix <- fm_pixels(statmesh, dims = c(200, 200),format = "sf")
+pred <- predict(m3_bru, pix, formula=~floc)
+ggplot() +
+  gg(statmesh) +
+  gg(pred, aes(color = mean))+
+  scale_color_gradientn(colours=brewer.pal(11, "RdYlBu"),
+                        limits=range(pred$mean))
+
 ```
-
-
 
 ### Convergence diagnostics
 
@@ -613,7 +650,6 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean))
 
 ```
 
-
 ### Global diagnostics of chosen model (CRPS, PPP values)
 
 ```{r}
@@ -624,8 +660,27 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean))
 
 ```
 
+**Fixed effect results**
+
+```{r}
+
+post_bovine <- m3_revised$marginals.fixed$LI_bovine_v2_sc
+plot(post_bovine, type="l", main="Posterior marginal for bovine FE",
+     ylab="Posterior density", xlab="FE value")
+
+post_pig <- m3_revised$marginals.fixed$LI_pigs_v2_sc
+plot(post_pig, type="l", main="Posterior marginal for pig FE",
+     ylab="Posterior density", xlab="FE value")
+
+intercept <- m3_revised$marginals.fixed$Intercept
+plot(intercept, type="l", main="Posterior marginal for intercept",
+     ylab="Posterior density", xlab="FE value")
 
 
+```
 
-
-
+The posterior distribution for the intercept is centred around 2.65 and
+contains almost all probability between 2.2 and 3.0. The fixed effect
+coefficients for the affect of the density of cows and pigs both have
+all their mass below zero, suggesting a negative affect of both types of
+livestock on the PM2.5 readings.
