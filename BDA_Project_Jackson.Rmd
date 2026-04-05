@@ -124,15 +124,25 @@ AIC(fit_lnorm)
 
 ```{r}
 
-statdomain <- inla.nonconvex.hull(as.matrix(unique_locs[, c("Longitude", "Latitude")]),
-  convex = -0.05, concave = -0.1,
-  resolution = c(100, 100))
+unique_locs <- unique(df[, c("Latitude", "Longitude")])
+
+statdomain <- inla.nonconvex.hull(
+  as.matrix(unique_locs[, c("Longitude", "Latitude")]),
+  convex = -0.1,
+  concave = -0.3,
+  resolution = c(100, 100)
+)
 plot(statdomain)
 
-statmesh <- fmesher::fm_mesh_2d(boundary = statdomain,
-  max.edge = c(0.2, 0.2), cutoff = 0.2)
+statmesh <- fmesher::fm_mesh_2d(
+  boundary = statdomain,
+  max.edge = c(0.03, 0.1),  # ~3 km / ~12 km in degrees
+  cutoff = 0.01         # ~1.5 km in degrees
+)
 plot(statmesh)
-points(unique_locs[, c("Longitude", "Latitude")], col="red", pch=20)
+points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0.5)
+
+
 
 ```
 
