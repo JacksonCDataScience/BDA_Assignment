@@ -123,52 +123,24 @@ AIC(fit_lnorm)
 ### Create the mesh
 
 ```{r}
-# unique_locs <- unique(df[, c("Latitude", "Longitude")])
-# 
-# statdomain <- inla.nonconvex.hull(
-#   as.matrix(unique_locs[, c("Longitude", "Latitude")]),
-#   convex = -0.1,
-#   concave = -0.3,
-#   resolution = c(100, 100)
-# )
-# plot(statdomain)
-# 
-# statmesh <- fmesher::fm_mesh_2d(
-#   boundary = statdomain,
-#   max.edge = c(0.03, 0.1),  # ~3 km / ~12 km in degrees
-#   cutoff = 0.01         # ~1.5 km in degrees
-# )
-# plot(statmesh)
-# points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0.5)
 
+unique_locs <- unique(df[, c("Latitude", "Longitude")])
 
-df_sf <- st_as_sf(df, coords = c("Longitude", "Latitude"), crs = 4326)
-# Project to UTM (meters) — Lombardy = zone 32N
-df_sf <- st_transform(df_sf, 32632)
-coords <- st_coordinates(df_sf)
-unique_locs <- unique(coords)
-# --------------------------------
-# 2. Boundary (convex/concave hull)
-# --------------------------------
 statdomain <- inla.nonconvex.hull(
-  as.matrix(unique_locs),
+  as.matrix(unique_locs[, c("Longitude", "Latitude")]),
   convex = -0.1,
   concave = -0.3,
   resolution = c(100, 100)
 )
 plot(statdomain)
-# --------------------------------
-# 3. SPDE mesh (NOW IN METERS)
-# --------------------------------
+
 statmesh <- fmesher::fm_mesh_2d(
   boundary = statdomain,
-  max.edge = c(3000, 12000),   # 3 km / 12 km
-  cutoff = 1500
+  max.edge = c(0.03, 0.1),  # ~3 km / ~12 km in degrees
+  cutoff = 0.01         # ~1.5 km in degrees
 )
 plot(statmesh)
-points(unique_locs, col = "red", pch = 20, cex = 0.5)
-
-
+points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0.5)
 
 ```
 
