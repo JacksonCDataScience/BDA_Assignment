@@ -17,7 +17,11 @@ library(INLA)
 library(inlabru)
 library(sf)
 library(ggplot2)
+<<<<<<< HEAD
 library(RColorBrewer)
+=======
+library(scoringRules)
+>>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
 
 ```
 
@@ -32,6 +36,7 @@ df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
 
+<<<<<<< HEAD
 ```{r}
 # create area_id column for spatial component (latent random effect)
 
@@ -53,6 +58,8 @@ df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 # note: animals densities are in number per square km
 ```
+=======
+>>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
 
 ```{r}
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
@@ -114,6 +121,8 @@ AIC(fit_lnorm)
 
 ```
 
+
+
 ### Create the mesh
 
 ```{r}
@@ -153,7 +162,7 @@ loc.spde = inla.spde2.pcmatern(
 
 bru_opts <- list(
   # control.family = list(link = "log"), # doesnt work with lognormal
-  control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+  control.compute = list(dic = TRUE, mlik = TRUE,  cpo = TRUE)
 )
 
 
@@ -223,14 +232,35 @@ m3_bru <- bru(
 ```{r}
 # model comparison and selection
 
-# WAIC -> balanced model fit and complexity
-cat("M0 WAIC =",  m0_bru$waic$waic, "\n")
-cat("M1 WAIC =",  m1_bru$waic$waic, "\n")
-cat("M2 WAIC =",  m2_bru$waic$waic, "\n")
-cat("M3 WAIC =",  m3_bru$waic$waic)
+# DIC
+cat("M0 DIC =",  m0_bru$dic$dic, "\n")
+cat("M1 DIC =",  m1_bru$dic$dic, "\n")
+cat("M2 DIC =",  m2_bru$dic$dic, "\n")
+cat("M3 DIC =",  m3_bru$dic$dic, "\n\n")
 
-# -> select full spatio-temporal model
+
+# NLSCPO
+m0_nlscpo <- -sum(log(m0_bru$cpo$cpo), na.rm = TRUE)
+m1_nlscpo <- -sum(log(m1_bru$cpo$cpo), na.rm = TRUE)
+m2_nlscpo <- -sum(log(m2_bru$cpo$cpo), na.rm = TRUE)
+m3_nlscpo <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
+
+cat("M0 NLSCPO =", m0_nlscpo, "\n")
+cat("M1 NLSCPO =", m1_nlscpo, "\n")
+cat("M2 NLSCPO =", m2_nlscpo, "\n")
+cat("M3 NLSCPO =", m3_nlscpo, "\n\n")
+
+
+# Marginal log-likelihood
+cat("M0 mlik =", m0_bru$mlik[1], "\n")
+cat("M1 mlik =", m1_bru$mlik[1], "\n")
+cat("M2 mlik =", m2_bru$mlik[1], "\n")
+cat("M3 mlik =", m3_bru$mlik[1], "\n")
+
+
 ```
+
+Although Model 3 had the best overall fit based on mlik, DIC, and NLSCP.
 
 ### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
 
@@ -521,6 +551,7 @@ ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
+<<<<<<< HEAD
 All three prior specifications — vague (u = 10), moderate (u = 1), and
 tight (u = 0.3) — produced near-identical posterior distributions,
 indicating that the data are sufficiently informative about the residual
@@ -530,6 +561,12 @@ as it provides mild regularisation without being overly restrictive, and
 reflects a reasonable belief that residual variation in log PM2.5 is
 unlikely to exceed 1 on the log scale while still allowing the data to
 drive the posterior entirely.
+=======
+
+All three prior specifications — vague (u = 10), moderate (u = 1), and tight (u = 0.3) — produced near-identical posterior distributions, indicating that the data are sufficiently informative about the residual variance to dominate prior specification across the range tested. Given this robustness, the moderate prior (u = 1) was selected going forward as it provides mild regularisation without being overly restrictive, and reflects a reasonable belief that residual variation in log PM2.5 is unlikely to exceed 1 on the log scale while still allowing the data to drive the posterior entirely.
+
+
+>>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
 
 ```{r}
 # Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
@@ -564,14 +601,35 @@ m3_revised <- bru(
         prec = list(prior = "pc.prec", param = c(1, 0.01))
       )
     ),
-    control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+    control.compute = list(cpo = TRUE, dic=TRUE, config = TRUE, mlik=TRUE)
   )
 )
+
+```
+
+```{r}
+# compare M3 against M3 Revised (for sensitivity analysis purposes)
+
+# DIC
+cat("M3 DIC =",  m3_bru$dic$dic, "\n")
+cat("M3 Revised DIC =",  m3_revised$dic$dic, "\n\n")
+
+# NLSCPO
+m3_nlscpo <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
+m3_nlscpo_revised <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
+
+cat("M3 NLSCPO =", m3_nlscpo, "\n")
+cat("M3 NLSCPO =", m3_nlscpo_revised, "\n\n")
+
+# Marginal log-likelihood
+cat("M3 mlik =", m3_bru$mlik[1], "\n")
+cat("M3 Revised mlik =", m3_revised$mlik[1], "\n")
 
 
 
 ```
 
+<<<<<<< HEAD
 Remarks: -All priors were chosen empirically through sensitivity
 analysis rather than arbitrarily -The moderate specification was
 selected consistently across all components, reflecting a principled
@@ -581,8 +639,202 @@ precision), the moderate prior is defensible simply as a sensible
 default -Where posteriors were sensitive (SPDE range and sigma), the
 moderate prior was selected for producing the most stable and
 interpretable posteriors
+=======
 
-# Visualise the random effects
+
+Remarks:
+-Priors were selected through empirical sensitivity analysis rather than arbitrarily, with a consistent preference for moderate regularisation across all components.
+-Fixed effects, the RW1 term, and likelihood precision were robust to prior specification, while the SPDE parameters showed expected sensitivity; the moderate prior was retained for stability and interpretability.
+-Model diagnostics indicate negligible impact of prior revision on performance: DIC is unchanged (736102.1 vs 736101.9), NLSCPO is identical (365493.7), and marginal likelihood shows a slight improvement (-368296.5 vs -368277.8).
+-Overall, the model is robust to reasonable prior perturbations, supporting the chosen specification as stable for inference and prediction.
+
+>>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
+
+### Global diagnostics of chosen model
+
+```{r}
+# sample from posterior
+
+df_obs <- df[!is.na(df$AQ_pm25), ] # disclude rows with missing response (want to compare observed against predicted)
+
+df_obs |>
+    group_by(IDStations) |>
+    summarise(na_bovine = sum(is.na(LI_bovine_v2_sc))) |>
+    filter(na_bovine > 0) # there is just one station with no livestock data, so remove that station (there are no rows in df_obs with missing location or month id)
+df_obs <- df_obs |> filter(IDStations != "STA-CH0033A") # remove station bc all its livestock data is missing
+
+n_sims <- 1000
+y_rep <- matrix(NA, nrow = nrow(df_obs), ncol = n_sims)
+post_samples <- inla.posterior.sample(n_sims, m3_revised)
+
+for(i in 1:n_sims){
+  s <- post_samples[[i]]
+  eta <- s$latent[1:nrow(df_obs)]        # linear predictor for each row
+  sigma <- 1 / sqrt(s$hyperpar[[1]])     # lognormal sd from precision hyperpar
+  y_rep[, i] <- rlnorm(nrow(df_obs), meanlog = eta, sdlog = sigma)
+}
+
+dim(y_rep)
+y_rep_all <- as.vector(y_rep)
+
+```
+
+
+```{r}
+# bayesian studentised residuals
+
+# compute residuals
+n <- nrow(df_obs)
+y <- log(df_obs$AQ_pm25)
+
+X <- cbind(1, df_obs$LI_bovine_v2_sc, df_obs$LI_pigs_v2_sc)
+XtX_inv <- solve(t(X) %*% X)
+h <- rowSums((X %*% XtX_inv) * X)
+
+studentisedred <- matrix(NA, nrow = n, ncol = n_sims)
+for(l in 1:n_sims){
+  s <- post_samples[[l]]
+  eta <- s$latent[1:n]                   
+  sigma <- 1 / sqrt(s$hyperpar[[1]])
+  studentisedred[,l] <- (y - eta) / sqrt(sigma^2 * (1 - h))
+}
+studentisedredm <- apply(studentisedred, 1, mean)
+
+
+# qq plot - checks log normality assumption
+qqnorm(studentisedredm,
+       main="",
+       xlab = "Theoretical Quantiles",
+       ylab = "Sample Quantiles",
+       pch = 16, cex = 0.4, col = "black",
+       xlim = c(-3,3), ylim = c(-3,3),
+       cex.lab = 1.25)
+qqline(studentisedredm, col = "red", lwd = 1.5)
+
+
+# residuals against index plot - checks independence of error terms
+# plot(seq_along(studentisedredm), studentisedredm, xlab="Index", ylab="Bayesian studentised residual (posterior mean)")
+
+# look at the extreme observation
+df_obs[which(studentisedredm < -10), c("IDStations", "Time", "AQ_pm25", "LI_bovine_v2_sc", "LI_pigs_v2_sc")] # dont plot extreme outlier (this is the value with the smallest pm25 observation, way smaller than any others, basically 0)
+
+plot(seq_along(studentisedredm), studentisedredm, 
+     xlab = "Index", 
+     ylab = "Bayesian studentised residual (posterior mean)", 
+     ylim = c(-8, 8),
+     pch = 16,      
+     cex = 0.2)
+
+# residuals against posterior mean of fitted values - linearity and constant variance of residuals
+fittedvalues <- matrix(0, nrow = n, ncol = n_sims)
+for(i in 1:n_sims){
+  s <- post_samples[[i]]
+  eta <- s$latent[1:n]
+  fittedvalues[, i] <- exp(eta)
+}
+
+fittedvaluesm<-numeric(n)
+for(i in 1:n){fittedvaluesm[i]=mean(fittedvalues[i,])}
+plot(fittedvaluesm,studentisedredm,
+     xlab="Fitted value (posterior mean)",
+     ylab="Bayesian Studentised residual (posterior mean)",
+     ylim=c(-8, 8), # get rid of that same outlier here too
+     pch = 16,
+     cex=0.2)
+
+
+```
+
+
+
+```{r}
+# histogram of sampled stats and observed ones
+
+df_obs <- df_obs[which(df_obs$AQ_pm25 > 3.699e-20), ] # get rid of that extreme outlier
+
+yrepmin <- apply(y_rep, 2, min)
+yrepmax <- apply(y_rep, 2, max)
+yrepmedian <- apply(y_rep, 2, median)
+require(fBasics)
+yrepskewness <- apply(y_rep, 2, skewness)
+
+obs_min <- min(df_obs$AQ_pm25)
+obs_max <- max(df_obs$AQ_pm25)
+obs_median <- median(df_obs$AQ_pm25)
+obs_skewness <- skewness(df_obs$AQ_pm25)
+
+# plot
+par(mfrow = c(2, 2))
+
+hist(yrepmin, main = "Min", xlab = "Min PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_min, col = "red", lwd = 2)
+
+hist(yrepmax, main = "Max", xlab = "Max PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_max, col = "red", lwd = 2)
+
+hist(yrepmedian, main = "Median", xlab = "Median PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_median, col = "red", lwd = 2)
+
+hist(yrepskewness, main = "Skewness", xlab = "Skewness PM2.5", col = "lightgrey", border = "white",  xlim = c(min(obs_skewness), 16))
+abline(v = obs_skewness, col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+
+
+
+
+```
+
+
+```{r}
+# plot of observed vs predicted values
+
+pred_mean <- rowMeans(y_rep)
+
+# plot
+hist(df_obs$AQ_pm25, 
+     freq     = FALSE,
+     main     = "",
+     xlab     = "PM2.5",
+     col      = rgb(0, 0, 1, 0.3),
+     border   = "white",
+     breaks   = 50,
+     ylim = c(0, 0.07))
+
+lines(density(pred_mean), col = "red", lwd = 2)
+
+legend("topright",
+       legend = c("Observed", "Posterior predictive mean"),
+       fill   = c(rgb(0, 0, 1, 0.3), NA),
+       border = c("white", NA),
+       lty    = c(NA, 1),
+       col    = c(NA, "red"),
+       lwd    = c(NA, 2))
+
+
+
+
+
+
+```
+
+
+
+
+###  Convergence Diagnostics
+
+```{r}
+
+# ??!!
+
+
+
+
+```
+
+
+
+### Visualise the random effects
 
 ```{r}
 
@@ -648,6 +900,7 @@ pred2 <- predict(m3_revised,df[,c("geometry","LI_bovine_v2_sc","LI_pigs_v2_sc","
 
 ```
 
+<<<<<<< HEAD
 ### Posterior Checks
 
 ```{r}
@@ -715,3 +968,8 @@ credible interval for the fixed effect parameter. The multiplier for
 both animals is below 1, suggesting that the presence of more animals at
 a given location is associated with a decrease in the pollution at that
 location.
+=======
+
+
+
+>>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
