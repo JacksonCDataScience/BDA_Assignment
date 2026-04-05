@@ -17,6 +17,7 @@ library(INLA)
 library(inlabru)
 library(sf)
 library(ggplot2)
+library(RColorBrewer)
 
 ```
 
@@ -41,7 +42,7 @@ unique_locs <- unique(df[, c("Latitude", "Longitude")])
 plot(unique_locs$Longitude, unique_locs$Latitude,
      pch = 19, col = "steelblue",
      xlab = "Longitude", ylab = "Latitude",
-     main = "Monitoring Station Locations") # the stations look pretty uniformly spread across the sampling area
+     main = "Monitoring Station Locations",xlim=c(5,15),ylim=c()) # the stations look pretty uniformly spread across the sampling area
 
 map("world", region = "Italy", add = TRUE, col = "grey80")
 points(unique_locs$Longitude, unique_locs$Latitude, pch = 19, col = "steelblue")
@@ -50,6 +51,7 @@ points(unique_locs$Longitude, unique_locs$Latitude, pch = 19, col = "steelblue")
 df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 
+# note: animals densities are in number per square km
 ```
 
 ```{r}
@@ -144,8 +146,8 @@ df$geometry <- sf::st_as_sf(Locations, coords = c("easting", "northing"))$geomet
 # SPDE model (spde spatial effect) -> specifying the priors for spatial effect (the only-non default priors for now)
 loc.spde = inla.spde2.pcmatern(
   mesh = statmesh,
-  prior.range = c(1, 0.5),
-  prior.sigma = c(1, 0.5),
+  prior.range = c(1, 0.5), # this means we set P(range<1)=0.5
+  prior.sigma = c(1, 0.5), # "      "   "   "  P(sigma>1)=0.5
   constr = TRUE
 )
 
@@ -585,7 +587,7 @@ interpretable posteriors
 ```{r}
 
 # Zac's
-# meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+ meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
 # 
 # # (M1) Temporal random effect
 # plot(m1_bru$summary.random$f$mean, type="l")
@@ -611,13 +613,13 @@ interpretable posteriors
 # Jackson's
 
 # temporal (M3)
-plot(m3_bru$summary.random$f$mean, type = "l",
+plot(m3_revised$summary.random$f$mean, type = "l",
      main = "M3: Temporal Random Effect",
      xlab = "Time index",
      ylab = "Effect (mean)")
 
 # spatial (M3)
-ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean)) +
+ggplot(meshlocs, aes(x = lon, y = lat, color = m3_revised$summary.random$floc$mean)) +
   geom_point(size = 2) +
   scale_color_viridis_c() +
   coord_equal() +
@@ -629,18 +631,28 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean))
 # Zac's updated (spatial only)
 
 pix <- fm_pixels(statmesh, dims = c(200, 200),format = "sf")
-pred <- predict(m3_bru, pix, formula=~floc)
+pred <- predict(m3_revised, pix, formula=~floc)
 ggplot() +
   gg(statmesh) +
   gg(pred, aes(color = mean))+
   scale_color_gradientn(colours=brewer.pal(11, "RdYlBu"),
-                        limits=range(pred$mean))
+                        limits=range(pred$mean))+
+  geom_point(
+  data = df,
+  aes(x = Longitude, y = Latitude,color = area_id == 108))
+  
+
+# how to generate things from existing datapoints using predict
+pred2 <- predict(m3_revised,df[,c("geometry","LI_bovine_v2_sc","LI_pigs_v2_sc","month_id")], 
+                 formula=AQ_pm25~Intercept+LI_bovine_v2_sc+LI_pigs_v2_sc+f+floc)
 
 ```
 
-### Convergence diagnostics
+### Posterior Checks
 
 ```{r}
+
+
 
 
 
@@ -682,5 +694,24 @@ plot(intercept, type="l", main="Posterior marginal for intercept",
 The posterior distribution for the intercept is centred around 2.65 and
 contains almost all probability between 2.2 and 3.0. The fixed effect
 coefficients for the affect of the density of cows and pigs both have
-all their mass below zero, suggesting a negative affect of both types of
-livestock on the PM2.5 readings.
+all their mass below zero.
+
+Due to the log link function, for fixed effects exp(coef) act as
+multipliers. That is, if the density of bovines increases by one unit,
+the PM2.5 reading increases by a factor of exp(coef_bovine).
+
+```{r}
+
+multipliers <- exp(m3_bru$summary.fixed[,c(3,4,5)])
+rownames(multipliers) <- c("Intercept","Bovine","Pigs")
+multipliers
+
+
+
+```
+
+The table displays the median effect, plus quantiles giving a 95%
+credible interval for the fixed effect parameter. The multiplier for
+both animals is below 1, suggesting that the presence of more animals at
+a given location is associated with a decrease in the pollution at that
+location.
