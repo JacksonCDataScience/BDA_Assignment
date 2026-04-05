@@ -17,11 +17,9 @@ library(INLA)
 library(inlabru)
 library(sf)
 library(ggplot2)
-<<<<<<< HEAD
 library(RColorBrewer)
-=======
 library(scoringRules)
->>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
+
 
 ```
 
@@ -36,7 +34,7 @@ df <- AgrImOnIA_Dataset_v_3_0_0
 
 ```
 
-<<<<<<< HEAD
+
 ```{r}
 # create area_id column for spatial component (latent random effect)
 
@@ -58,8 +56,7 @@ df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
 
 # note: animals densities are in number per square km
 ```
-=======
->>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
+
 
 ```{r}
 # define a t_id temporal "season" to asses seasonal patterns (latent random effect)
@@ -551,7 +548,7 @@ ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-<<<<<<< HEAD
+
 All three prior specifications — vague (u = 10), moderate (u = 1), and
 tight (u = 0.3) — produced near-identical posterior distributions,
 indicating that the data are sufficiently informative about the residual
@@ -561,12 +558,11 @@ as it provides mild regularisation without being overly restrictive, and
 reflects a reasonable belief that residual variation in log PM2.5 is
 unlikely to exceed 1 on the log scale while still allowing the data to
 drive the posterior entirely.
-=======
+
 
 All three prior specifications — vague (u = 10), moderate (u = 1), and tight (u = 0.3) — produced near-identical posterior distributions, indicating that the data are sufficiently informative about the residual variance to dominate prior specification across the range tested. Given this robustness, the moderate prior (u = 1) was selected going forward as it provides mild regularisation without being overly restrictive, and reflects a reasonable belief that residual variation in log PM2.5 is unlikely to exceed 1 on the log scale while still allowing the data to drive the posterior entirely.
 
 
->>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
 
 ```{r}
 # Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
@@ -629,7 +625,7 @@ cat("M3 Revised mlik =", m3_revised$mlik[1], "\n")
 
 ```
 
-<<<<<<< HEAD
+
 Remarks: -All priors were chosen empirically through sensitivity
 analysis rather than arbitrarily -The moderate specification was
 selected consistently across all components, reflecting a principled
@@ -639,7 +635,7 @@ precision), the moderate prior is defensible simply as a sensible
 default -Where posteriors were sensitive (SPDE range and sigma), the
 moderate prior was selected for producing the most stable and
 interpretable posteriors
-=======
+
 
 
 Remarks:
@@ -648,7 +644,7 @@ Remarks:
 -Model diagnostics indicate negligible impact of prior revision on performance: DIC is unchanged (736102.1 vs 736101.9), NLSCPO is identical (365493.7), and marginal likelihood shows a slight improvement (-368296.5 vs -368277.8).
 -Overall, the model is robust to reasonable prior perturbations, supporting the chosen specification as stable for inference and prediction.
 
->>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
+
 
 ### Global diagnostics of chosen model
 
@@ -900,31 +896,6 @@ pred2 <- predict(m3_revised,df[,c("geometry","LI_bovine_v2_sc","LI_pigs_v2_sc","
 
 ```
 
-<<<<<<< HEAD
-### Posterior Checks
-
-```{r}
-
-
-
-
-
-
-
-
-
-```
-
-### Global diagnostics of chosen model (CRPS, PPP values)
-
-```{r}
-
-
-
-
-
-```
-
 **Fixed effect results**
 
 ```{r}
@@ -968,8 +939,4 @@ credible interval for the fixed effect parameter. The multiplier for
 both animals is below 1, suggesting that the presence of more animals at
 a given location is associated with a decrease in the pollution at that
 location.
-=======
 
-
-
->>>>>>> a31399caa8436b22fb4a31d6e2acfcc693b28566
