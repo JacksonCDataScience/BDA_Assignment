@@ -72,7 +72,7 @@ hist(complete_case_df$AQ_pm25, freq = FALSE,
      main = "PM2.5 with Log-Normal Overlay",
      xlab = "PM2.5 Concentration",
      col = "lightblue", border = "white",
-     ylim = c(0, 0.05))
+     ylim = c(0, 0.05), breaks=50)
 
 # overlay density
 x_seq <- seq(0, max(complete_case_df$AQ_pm25), length.out = 500)
