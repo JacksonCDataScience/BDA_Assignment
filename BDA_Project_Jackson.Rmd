@@ -17,11 +17,10 @@ library(INLA)
 library(inlabru)
 library(sf)
 library(ggplot2)
-library(RColorBrewer)
 library(scoringRules)
 
-
 ```
+
 
 ### Data pre-processing
 
@@ -32,29 +31,6 @@ load("Agrimonia_Dataset_v_3_0_0.Rdata")
 
 df <- AgrImOnIA_Dataset_v_3_0_0
 
-```
-
-
-```{r}
-# create area_id column for spatial component (latent random effect)
-
-
-# visualize the locations of our data
-unique_locs <- unique(df[, c("Latitude", "Longitude")])
-
-plot(unique_locs$Longitude, unique_locs$Latitude,
-     pch = 19, col = "steelblue",
-     xlab = "Longitude", ylab = "Latitude",
-     main = "Monitoring Station Locations",xlim=c(5,15),ylim=c()) # the stations look pretty uniformly spread across the sampling area
-
-map("world", region = "Italy", add = TRUE, col = "grey80")
-points(unique_locs$Longitude, unique_locs$Latitude, pch = 19, col = "steelblue")
-
-# create area_id column to use as spatial random effect
-df$area_id <- as.integer(factor(paste(df$Latitude,df$Longitude,sep = "_")))
-
-
-# note: animals densities are in number per square km
 ```
 
 
@@ -70,7 +46,9 @@ df$month_id <- as.integer(format(df$Time, "%m"))
 
 ```
 
-### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -\> air quality pm 2.5)
+
+
+### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -> air quality pm 2.5)
 
 ```{r}
 
@@ -122,7 +100,10 @@ AIC(fit_lnorm)
 
 ### Create the mesh
 
+
 ```{r}
+# !!?? ensure the mesh is appropriate
+
 unique_locs <- unique(df[, c("Latitude", "Longitude")])
 
 statdomain <- inla.nonconvex.hull(
@@ -143,38 +124,39 @@ points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0
 
 ```
 
+
 ### Fit models
 
-```{r}
-
+```{r, include=FALSE}
 # scale covariates
-df$LI_bovine_v2_sc <- as.numeric(scale(df$LI_bovine_v2))
-df$LI_pigs_v2_sc <- as.numeric(scale(df$LI_pigs_v2))
+# df$LI_bovine_v2_sc <- as.numeric(scale(df$LI_bovine_v2))
+# df$LI_pigs_v2_sc <- as.numeric(scale(df$LI_pigs_v2))
+df$Altitude_sc <- as.numeric(scale(df$Altitude))
 
 
 # spatial points
-Locations = data.frame(easting = df$Longitude, northing = df$Latitude) 
+Locations = data.frame(easting = df$Longitude, northing = df$Latitude)
 df$geometry <- sf::st_as_sf(Locations, coords = c("easting", "northing"))$geometry
 
 # SPDE model (spde spatial effect) -> specifying the priors for spatial effect (the only-non default priors for now)
 loc.spde = inla.spde2.pcmatern(
-  mesh = statmesh,
-  prior.range = c(1, 0.5), # this means we set P(range<1)=0.5
-  prior.sigma = c(1, 0.5), # "      "   "   "  P(sigma>1)=0.5
-  constr = TRUE
+mesh = statmesh,
+prior.range = c(1, 0.5),
+prior.sigma = c(1, 0.5),
+constr = TRUE
 )
+
 
 bru_opts <- list(
-  # control.family = list(link = "log"), # doesnt work with lognormal
-  control.compute = list(dic = TRUE, mlik = TRUE,  cpo = TRUE)
+  control.compute = list(dic = TRUE, mlik = TRUE,  cpo = TRUE, waic=TRUE)
 )
-
 
 # M0: Fixed effects only
 cmp_m0 <- AQ_pm25 ~ 
   Intercept(1) + 
-  LI_bovine_v2_sc +
-  LI_pigs_v2_sc
+  Altitude_sc
+  #LI_bovine_v2_sc +
+  #LI_pigs_v2_sc
 
 m0_bru <- bru(
   components = cmp_m0,
@@ -186,8 +168,9 @@ m0_bru <- bru(
 # M1: Fixed + Temporal effect (rw1)
 cmp_m1 <- AQ_pm25 ~ 
   Intercept(1) + 
-  LI_bovine_v2_sc +
-  LI_pigs_v2_sc + 
+  Altitude_sc +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc + 
   f(month_id, model = "rw1", cyclic = TRUE)
 
 m1_bru <- bru(
@@ -200,8 +183,9 @@ m1_bru <- bru(
 # M2: Fixed + Spatial effects (SPDE - matern)
 cmp_m2 <- AQ_pm25 ~ 
   Intercept(1) + 
-  LI_bovine_v2_sc +
-  LI_pigs_v2_sc + 
+  Altitude_sc +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc + 
   floc(geometry, model = loc.spde)
 
 m2_bru <- bru(
@@ -211,12 +195,12 @@ m2_bru <- bru(
   options = bru_opts
 )
 
-
 # M3: Full spatio-temporal
 cmp_m3 <- AQ_pm25 ~ 
   Intercept(1) + 
-  LI_bovine_v2_sc +
-  LI_pigs_v2_sc + 
+  Altitude_sc +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc + 
   f(month_id, model = "rw1", cyclic = TRUE) +
   floc(geometry, model = loc.spde)
 
@@ -227,14 +211,21 @@ m3_bru <- bru(
   options = bru_opts
 )
 
-
-
 ```
+
 
 ### Model comparison and selection
 
+
 ```{r}
 # model comparison and selection
+
+# WAIC
+cat("M0 WAIC =",  m0_bru$waic$waic, "\n")
+cat("M1 WAIC =",  m1_bru$waic$waic, "\n")
+cat("M2 WAIC =",  m2_bru$waic$waic, "\n")
+cat("M3 WAIC =",  m3_bru$waic$waic, "\n\n")
+
 
 # DIC
 cat("M0 DIC =",  m0_bru$dic$dic, "\n")
@@ -261,27 +252,47 @@ cat("M1 mlik =", m1_bru$mlik[1], "\n")
 cat("M2 mlik =", m2_bru$mlik[1], "\n")
 cat("M3 mlik =", m3_bru$mlik[1], "\n")
 
+# # Standard deviation of mean residuals
+# get_sd_resid <- function(model, response) {
+#   obs_idx <- grep("fitted.APredictor", rownames(model$summary.fitted.values))
+#   fitted_obs <- exp(model$summary.fitted.values$mean[obs_idx])
+#   sd(response - fitted_obs, na.rm = TRUE)
+# }
+# 
+# cat("M0 SD of mean residuals =", get_sd_resid(m0_bru, df$AQ_pm25), "\n")
+# cat("M1 SD of mean residuals =", get_sd_resid(m1_bru, df$AQ_pm25), "\n")
+# cat("M2 SD of mean residuals =", get_sd_resid(m2_bru, df$AQ_pm25), "\n")
+# cat("M3 SD of mean residuals =", get_sd_resid(m3_bru, df$AQ_pm25), "\n")
+# 
+# 
+# # PIT 
+# hist(m0_bru$cpo$pit)
+# hist(m1_bru$cpo$pit)
+# hist(m2_bru$cpo$pit)
+# hist(m3_bru$cpo$pit)
+
+
+
+
 
 ```
 
-Although Model 3 had the best overall fit based on mlik, DIC, and NLSCP.
+Model 3 best.
 
 ### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
 
+
 ```{r}
-# Fixed effects - β (Intercept + covariates):
+# Fixed effects - β (Intercept + covariate):
 
 fit_fixed_prior <- function(prec) {
   cmp <- AQ_pm25 ~ 
     Intercept(1,
             mean.linear = 0,
             prec.linear = prec) + 
-  LI_bovine_v2_sc(LI_bovine_v2_sc,
-                  mean.linear = 0,
-                  prec.linear = prec) +       
-  LI_pigs_v2_sc(LI_pigs_v2_sc,
-                mean.linear = 0,
-                prec.linear = prec) +      
+    Altitude_sc(Altitude_sc,
+                mean.linear=0,
+                prec.linear=prec) +      
   f(month_id, model = "rw1", cyclic = TRUE) +
   floc(geometry, model = loc.spde)
   
@@ -293,9 +304,9 @@ fit_fixed_prior <- function(prec) {
   )
 }
 
-m3_fixed_vague  <- fit_fixed_prior(0.001) # very vague
+m3_fixed_vague  <- fit_fixed_prior(0.001) # very vague (weakly informative)
 m3_fixed_mod    <- fit_fixed_prior(1) # moderate
-m3_fixed_tight  <- fit_fixed_prior(10) # tight
+m3_fixed_tight  <- fit_fixed_prior(10) # tight (strongly informative)
 
 # Compare priors
 extract_marginal <- function(model, param, label) {
@@ -304,7 +315,7 @@ extract_marginal <- function(model, param, label) {
   marg
 }
 
-all_params <- c("Intercept", "LI_bovine_v2_sc", "LI_pigs_v2_sc")
+all_params <- c("Intercept", "Altitude_sc")
 
 all_marginals <- bind_rows(
   lapply(all_params, function(p)
@@ -328,17 +339,8 @@ ggplot(all_marginals, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-The vague and weakly informative priors produced near-identical
-posterior distributions, indicating that the data are sufficiently
-informative to dominate prior specification across a reasonable range.
-The tight prior (precision = 10, SD ≈ 0.32) produced noticeably
-different posteriors, particularly for the intercept, suggesting this
-specification is overly restrictive given the scale of the standardised
-covariates. In the absence of strong domain knowledge regarding the
-expected magnitude of livestock density effects on PM2.5, a moderate
-prior (precision = 1, SD = 1) was selected for all fixed effects going
-forward, providing mild regularisation while allowing the data to drive
-inference.
+The weakly informative and moderately informative priors produced near-identical posterior distributions, indicating that the data are sufficiently informative to dominate prior specification across a reasonable range. The tight prior (precision = 10, SD ≈ 0.32) produced noticeably different posteriors, suggesting this specification is overly restrictive given the scale of the standardised covariates. In the absence of strong domain knowledge regarding the expected magnitude of altitude effects on PM2.5, a moderate prior (precision = 1, SD = 1) was selected for all fixed effects going forward, providing mild regularisation while allowing the data to drive inference.
+
 
 ```{r}
 # Temporal effect (RW1 precision)
@@ -349,8 +351,7 @@ fit_rw1_prior <- function(u, alpha, label) {
   
   cmp <- AQ_pm25 ~
     Intercept(1, mean.linear = 0, prec.linear = 1) +
-    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
-    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
     f(month_id, model = "rw1", cyclic = TRUE, hyper = rw1_hyper) +
     floc(geometry, model = loc.spde)
   
@@ -390,18 +391,8 @@ ggplot(rw1_sens, aes(x = ID, y = mean, colour = prior_spec,
 
 ```
 
-All three prior specifications — smooth (u = 0.1), moderate (u = 1), and
-flexible (u = 10) — produced near-identical posterior seasonal curves,
-indicating that the data are sufficiently informative to determine the
-shape and magnitude of the temporal effect regardless of how strongly
-the prior constrains month-to-month variation. This is reassuring as it
-suggests the seasonal pattern in PM2.5 is a genuine signal in the data
-rather than an artefact of prior specification. Going forward, the
-moderate prior (u = 1, alpha = 0.01) was selected, as it represents a
-sensible default that places a weak but not negligible constraint on
-temporal variation — allowing meaningful seasonal fluctuation while
-providing mild regularisation — without requiring strong domain
-knowledge about the exact smoothness of the seasonal cycle.
+All three prior specifications — smooth (u = 0.1), moderate (u = 1), and flexible (u = 10) — produced near-identical posterior seasonal curves, indicating that the data are sufficiently informative to determine the shape and magnitude of the temporal effect regardless of how strongly the prior constrains month-to-month variation. This is reassuring as it suggests the seasonal pattern in PM2.5 is a genuine signal in the data rather than an artefact of prior specification. Going forward, the moderate prior (u = 1, alpha = 0.01) was selected, as it represents a sensible default that places a weak but not negligible constraint on temporal variation — allowing meaningful seasonal fluctuation while providing mild regularisation — without requiring strong domain knowledge about the exact smoothness of the seasonal cycle.
+
 
 ```{r}
 # Spatial effect (SPDE: ρ, σ)
@@ -415,8 +406,7 @@ fit_spde_prior <- function(range0, Prange, sigma0, Psigma, label) {
   )
   cmp <- AQ_pm25 ~
     Intercept(1, mean.linear = 0, prec.linear = 1) +
-    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
-    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
     f(month_id, model = "rw1", cyclic = TRUE,
       hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
     floc(geometry, model = spde)
@@ -470,22 +460,8 @@ ggplot(sigma_sens, aes(x = x, y = y, colour = prior_spec)) +
 
 ```
 
-There is greater prior sensitivity than observed for the fixed effects
-or temporal component, particularly for the range parameter. The vague
-prior allowed the range to collapse toward very short distances
-inconsistent with the spatial scale of the domain, while the moderate
-and tight priors produced more stable and interpretable posteriors. For
-sigma, all three specifications concentrated around similar values
-(\~0.8–0.9), however the moderate prior produced a notably tighter
-posterior, suggesting the moderate sigma prior (median = 1) is
-well-aligned with the signal in the data, while the vague and tight
-specifications introduced unnecessary additional uncertainty. Given the
-absence of strong domain knowledge, the moderate prior (range median
-\~100km, sigma median = 1) was selected as it produced well-identified
-posteriors for both parameters without unduly constraining the spatial
-field, and reflects a reasonable belief that spatial correlation in
-PM2.5 operates at a regional rather than hyper-local scale across the
-study domain
+There is greater prior sensitivity than observed for the fixed effects or temporal component, particularly for the range parameter. The vague prior allowed the range to collapse toward very short distances inconsistent with the spatial scale of the domain, while the moderate and tight priors produced more stable and interpretable posteriors. For sigma, all three specifications concentrated around similar values (~0.2–0.3), however the moderate prior produced a notably tighter posterior, suggesting the moderate sigma prior (median = 1) is well-aligned with the signal in the data, while the vague and tight specifications introduced unnecessary additional uncertainty. Given the absence of strong domain knowledge, the moderate prior (range median ~100km, sigma median = 1) was selected as it produced well-identified posteriors for both parameters without unduly constraining the spatial field, and reflects a reasonable belief that spatial correlation in PM2.5 operates at a regional rather than hyper-local scale across the study domain
+
 
 ```{r}
 # Log-normal likelihood precision
@@ -499,8 +475,7 @@ fit_likelihood_prior <- function(u, alpha, label) {
   )
   cmp <- AQ_pm25 ~
     Intercept(1, mean.linear = 0, prec.linear = 1) +
-    LI_bovine_v2_sc(LI_bovine_v2_sc, mean.linear = 0, prec.linear = 1) +
-    LI_pigs_v2_sc(LI_pigs_v2_sc, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
     f(month_id, model = "rw1", cyclic = TRUE,
       hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
     floc(geometry, model = spde)
@@ -520,7 +495,7 @@ fit_likelihood_prior <- function(u, alpha, label) {
 }
 
 
-# posterior precision ~2.67 → residual SD ≈ 1/sqrt(2.67) ≈ 0.61
+# posterior precision ~2.67 -> residual SD ~1/sqrt(2.67)~0.61
 m3_bru$summary.hyperpar["Precision for the lognormal observations", ]
 
 m3_lik_vague  <- fit_likelihood_prior(u = 10,  alpha = 0.01, label = "Vague")    # essentially flat — well above posterior SD of 0.61
@@ -556,22 +531,10 @@ ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
 ```
 
 
-All three prior specifications — vague (u = 10), moderate (u = 1), and
-tight (u = 0.3) — produced near-identical posterior distributions,
-indicating that the data are sufficiently informative about the residual
-variance to dominate prior specification across the range tested. Given
-this robustness, the moderate prior (u = 1) was selected going forward
-as it provides mild regularisation without being overly restrictive, and
-reflects a reasonable belief that residual variation in log PM2.5 is
-unlikely to exceed 1 on the log scale while still allowing the data to
-drive the posterior entirely.
+Moderate (u = 1) and tight (u = 0.3) priors produced similar posterior distributions, while the vague (u=10) prior showed some deviation. This suggests that the data are sufficiently informative to dominate prior specification within a reasonable range, but that excessively diffuse priors can still influence the posterior. Given this, the moderate prior (u = 1) was selected going forward, as it provides mild regularisation without being overly restrictive, avoiding the instability of the vague prior while still allowing the data to primarily determine the posterior
 
 
-All three prior specifications — vague (u = 10), moderate (u = 1), and tight (u = 0.3) — produced near-identical posterior distributions, indicating that the data are sufficiently informative about the residual variance to dominate prior specification across the range tested. Given this robustness, the moderate prior (u = 1) was selected going forward as it provides mild regularisation without being overly restrictive, and reflects a reasonable belief that residual variation in log PM2.5 is unlikely to exceed 1 on the log scale while still allowing the data to drive the posterior entirely.
-
-
-
-```{r}
+```{r, include=FALSE}
 # Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
 
 # final SPDE with chosen priors
@@ -585,9 +548,7 @@ loc.spde <- inla.spde2.pcmatern(
 cmp_m3 <- AQ_pm25 ~
   Intercept(1,
             mean.linear = 0, prec.linear = 1) +
-  LI_bovine_v2_sc(LI_bovine_v2_sc,
-                  mean.linear = 0, prec.linear = 1) +
-  LI_pigs_v2_sc(LI_pigs_v2_sc,
+  Altitude_sc(Altitude_sc,
                 mean.linear = 0, prec.linear = 1) +
   f(month_id, model = "rw1", cyclic = TRUE,
     hyper = list(prec = list(prior = "pc.prec",
@@ -604,7 +565,7 @@ m3_revised <- bru(
         prec = list(prior = "pc.prec", param = c(1, 0.01))
       )
     ),
-    control.compute = list(cpo = TRUE, dic=TRUE, config = TRUE, mlik=TRUE)
+    control.compute = list(cpo = TRUE, dic=TRUE, config = TRUE, mlik=TRUE, waic=TRUE)
   )
 )
 
@@ -617,9 +578,13 @@ m3_revised <- bru(
 cat("M3 DIC =",  m3_bru$dic$dic, "\n")
 cat("M3 Revised DIC =",  m3_revised$dic$dic, "\n\n")
 
+# WAIC
+cat("M3 WAIC =",  m3_bru$waic$waic, "\n")
+cat("M3 Revised WAIC =",  m3_revised$waic$waic, "\n\n")
+
 # NLSCPO
 m3_nlscpo <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
-m3_nlscpo_revised <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
+m3_nlscpo_revised <- -sum(log(m3_revised$cpo$cpo), na.rm = TRUE)
 
 cat("M3 NLSCPO =", m3_nlscpo, "\n")
 cat("M3 NLSCPO =", m3_nlscpo_revised, "\n\n")
@@ -633,24 +598,12 @@ cat("M3 Revised mlik =", m3_revised$mlik[1], "\n")
 ```
 
 
-Remarks: -All priors were chosen empirically through sensitivity
-analysis rather than arbitrarily -The moderate specification was
-selected consistently across all components, reflecting a principled
-philosophy of mild regularisation without domain knowledge -Where
-posteriors were robust across specs (fixed effects, RW1, likelihood
-precision), the moderate prior is defensible simply as a sensible
-default -Where posteriors were sensitive (SPDE range and sigma), the
-moderate prior was selected for producing the most stable and
-interpretable posteriors
-
-
 
 Remarks:
 -Priors were selected through empirical sensitivity analysis rather than arbitrarily, with a consistent preference for moderate regularisation across all components.
--Fixed effects, the RW1 term, and likelihood precision were robust to prior specification, while the SPDE parameters showed expected sensitivity; the moderate prior was retained for stability and interpretability.
--Model diagnostics indicate negligible impact of prior revision on performance: DIC is unchanged (736102.1 vs 736101.9), NLSCPO is identical (365493.7), and marginal likelihood shows a slight improvement (-368296.5 vs -368277.8).
+-Fixed effects, the RW1 term, and likelihood precision were relatively robust to prior specification, while the SPDE parameters showed expected sensitivity; the moderate prior was retained for stability and interpretability.
+-Model diagnostics indicate negligible impact of prior revision on performance
 -Overall, the model is robust to reasonable prior perturbations, supporting the chosen specification as stable for inference and prediction.
-
 
 
 ### Global diagnostics of chosen model
@@ -660,13 +613,7 @@ Remarks:
 
 df_obs <- df[!is.na(df$AQ_pm25), ] # disclude rows with missing response (want to compare observed against predicted)
 
-df_obs |>
-    group_by(IDStations) |>
-    summarise(na_bovine = sum(is.na(LI_bovine_v2_sc))) |>
-    filter(na_bovine > 0) # there is just one station with no livestock data, so remove that station (there are no rows in df_obs with missing location or month id)
-df_obs <- df_obs |> filter(IDStations != "STA-CH0033A") # remove station bc all its livestock data is missing
-
-n_sims <- 1000
+n_sims <- 100 # may want to crank this up
 y_rep <- matrix(NA, nrow = nrow(df_obs), ncol = n_sims)
 post_samples <- inla.posterior.sample(n_sims, m3_revised)
 
@@ -690,7 +637,7 @@ y_rep_all <- as.vector(y_rep)
 n <- nrow(df_obs)
 y <- log(df_obs$AQ_pm25)
 
-X <- cbind(1, df_obs$LI_bovine_v2_sc, df_obs$LI_pigs_v2_sc)
+X <- cbind(1, df_obs$Altitude_sc)
 XtX_inv <- solve(t(X) %*% X)
 h <- rowSums((X %*% XtX_inv) * X)
 
@@ -716,7 +663,7 @@ qqline(studentisedredm, col = "red", lwd = 1.5)
 
 
 # residuals against index plot - checks independence of error terms
-# plot(seq_along(studentisedredm), studentisedredm, xlab="Index", ylab="Bayesian studentised residual (posterior mean)")
+plot(seq_along(studentisedredm), studentisedredm, xlab="Index", ylab="Bayesian studentised residual (posterior mean)")
 
 # look at the extreme observation
 df_obs[which(studentisedredm < -10), c("IDStations", "Time", "AQ_pm25", "LI_bovine_v2_sc", "LI_pigs_v2_sc")] # dont plot extreme outlier (this is the value with the smallest pm25 observation, way smaller than any others, basically 0)
@@ -842,7 +789,7 @@ legend("topright",
 ```{r}
 
 # Zac's
- meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+# meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
 # 
 # # (M1) Temporal random effect
 # plot(m1_bru$summary.random$f$mean, type="l")
@@ -883,6 +830,7 @@ ggplot(meshlocs, aes(x = lon, y = lat, color = m3_revised$summary.random$floc$me
        color = "Effect")
 
 
+
 # Zac's updated (spatial only)
 
 pix <- fm_pixels(statmesh, dims = c(200, 200),format = "sf")
@@ -907,12 +855,8 @@ pred2 <- predict(m3_revised,df[,c("geometry","LI_bovine_v2_sc","LI_pigs_v2_sc","
 
 ```{r}
 
-post_bovine <- m3_revised$marginals.fixed$LI_bovine_v2_sc
-plot(post_bovine, type="l", main="Posterior marginal for bovine FE",
-     ylab="Posterior density", xlab="FE value")
-
-post_pig <- m3_revised$marginals.fixed$LI_pigs_v2_sc
-plot(post_pig, type="l", main="Posterior marginal for pig FE",
+post_altitude <- m3_revised$marginals.fixed$Altitude_sc
+plot(post_altitude, type="l", main="Posterior marginal for altitude",
      ylab="Posterior density", xlab="FE value")
 
 intercept <- m3_revised$marginals.fixed$Intercept
@@ -922,28 +866,26 @@ plot(intercept, type="l", main="Posterior marginal for intercept",
 
 ```
 
-The posterior distribution for the intercept is centred around 2.65 and
-contains almost all probability between 2.2 and 3.0. The fixed effect
-coefficients for the affect of the density of cows and pigs both have
-all their mass below zero.
+The posterior distribution for the intercept is centred around ... and
+contains almost all probability between ... and ... The fixed effect
+coefficient for the affect of the altitude has ...
 
-Due to the log link function, for fixed effects exp(coef) act as
-multipliers. That is, if the density of bovines increases by one unit,
-the PM2.5 reading increases by a factor of exp(coef_bovine).
+Due to the log link function, for fixed effect exp(coef) act as
+multipliers. That is, if the density of altitude increases by one unit,
+the PM2.5 reading ... by a factor of exp(coef_altitude).
 
 ```{r}
 
 multipliers <- exp(m3_bru$summary.fixed[,c(3,4,5)])
-rownames(multipliers) <- c("Intercept","Bovine","Pigs")
+rownames(multipliers) <- c("Intercept","Altitude")
 multipliers
-
 
 
 ```
 
 The table displays the median effect, plus quantiles giving a 95%
 credible interval for the fixed effect parameter. The multiplier for
-both animals is below 1, suggesting that the presence of more animals at
-a given location is associated with a decrease in the pollution at that
-location.
+altitude is ... 1, suggesting that ... is associated with a ... in the pollution at that
+location and month.
+
 
