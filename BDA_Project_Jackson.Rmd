@@ -95,13 +95,11 @@ AIC(fit_lnorm)
 ### Create the mesh
 
 ```{r}
-# !!?? ensure the mesh is appropriate
-
 unique_locs <- unique(df[, c("Latitude", "Longitude")])
 
 statdomain <- inla.nonconvex.hull(
   as.matrix(unique_locs[, c("Longitude", "Latitude")]),
-  convex = -0.1,
+  convex = -0.05,
   concave = -0.3,
   resolution = c(100, 100)
 )
@@ -109,8 +107,8 @@ plot(statdomain)
 
 statmesh <- fmesher::fm_mesh_2d(
   boundary = statdomain,
-  max.edge = c(0.03, 0.1),  # ~3 km / ~12 km in degrees
-  cutoff = 0.01         # ~1.5 km in degrees
+  max.edge = c(0.15, 0.4),
+  cutoff = 0.05
 )
 plot(statmesh)
 points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0.5)
@@ -623,16 +621,12 @@ cat("M3 Revised mlik =", m3_revised$mlik[1], "\n")
 
 ```
 
-Remarks: -Priors were selected through empirical sensitivity analysis
-rather than arbitrarily, with a consistent preference for moderate
-regularisation across all components. -Fixed effects, the RW1 term, and
-likelihood precision were relatively robust to prior specification,
-while the SPDE parameters showed expected sensitivity; the moderate
-prior was retained for stability and interpretability. -Model
-diagnostics indicate negligible impact of prior revision on performance
--Overall, the model is robust to reasonable prior perturbations,
-supporting the chosen specification as stable for inference and
-prediction.
+Remarks:
+-Priors were selected through empirical sensitivity analysis rather than arbitrarily, with a consistent preference for moderate regularisation across all components.
+-RW1 term and likelihood precision were relatively robust to prior specification, while the fixed effects and SPDE parameters showed more sensitivity; the moderate prior was retained for stability and interpretability.
+-Model diagnostics indicate negligible impact of prior revision on performance
+-Overall, the model is robust to reasonable prior perturbations, supporting the chosen specification as stable for inference and prediction.
+
 
 ### Global diagnostics of chosen model
 
@@ -693,7 +687,7 @@ qqline(studentisedredm, col = "red", lwd = 1.5)
 plot(seq_along(studentisedredm), studentisedredm, xlab="Index", ylab="Bayesian studentised residual (posterior mean)")
 
 # look at the extreme observation
-df_obs[which(studentisedredm < -10), c("IDStations", "Time", "AQ_pm25", "Altitude")] # dont plot extreme outlier (this is the value with the smallest pm25 observation, way smaller than any others, basically 0)
+# df_obs[which(studentisedredm < -10), c("IDStations", "Time", "AQ_pm25", "LI_bovine_v2_sc", "LI_pigs_v2_sc")] # dont plot extreme outlier (this is the value with the smallest pm25 observation, way smaller than any others, basically 0)
 
 plot(seq_along(studentisedredm), studentisedredm, 
      xlab = "Index", 
@@ -891,14 +885,13 @@ plot(intercept, type="l", main="Posterior marginal for intercept",
 
 ```
 
-The posterior distribution for the intercept is centred around 2.73 and
-contains almost all probability between 2.60 and 2.83 The fixed effect
-coefficient for the affect of the altitude has negative sign.
+The posterior distribution for the intercept is centred around 2.7 and
+contains almost all probability between 2.5 and 2.9. The fixed effect
+coefficient for the affect of the altitude is centred around -0.2 and spans from -0.4 to 0.1.
 
 Due to the log link function, for fixed effect exp(coef) act as
 multipliers. That is, if the density of altitude increases by one unit,
-the PM2.5 reading changes by a factor of exp(coef_altitude).
-
+the PM2.5 reading decreases by a factor of exp(coef_altitude).
 ```{r}
 
 multipliers <- exp(m3_bru$summary.fixed[,c(3,4,5)])
@@ -910,6 +903,6 @@ multipliers
 
 The table displays the median effect, plus quantiles giving a 95%
 credible interval for the fixed effect parameter. The multiplier for
-altitude is 0.843, suggesting that an increase in one standard deviation
-in altitude of 213m is associated with a decrease in the pollution at
-that location and month of \~16.5%.
+altitude is 0.77, suggesting that an increase in one standard deviation
+in altitude of ... is associated with a decrease in the pollution at
+that location and month of ....
