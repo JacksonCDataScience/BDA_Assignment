@@ -156,6 +156,10 @@ summary(mod3.bru)
 
 Visualising the random effects - now both spatial and temporal
 
+\# temporal affect
+
+plot(mod3.bru\$summary.random\$ftime\$mean, type="l")
+
 ```{r}
 # spatial effect
 meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
