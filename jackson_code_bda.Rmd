@@ -1,0 +1,940 @@
+---
+editor_options:
+  markdown:
+    wrap: 72
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+
+library(dplyr)
+library(maps)
+library(spdep)
+library(MASS)
+library(INLA)
+library(inlabru)
+library(sf)
+library(ggplot2)
+library(scoringRules)
+
+```
+
+
+### Data pre-processing
+
+```{r}
+# load data
+
+load("Agrimonia_Dataset_v_3_0_0.Rdata")
+
+df <- AgrImOnIA_Dataset_v_3_0_0
+
+```
+
+
+```{r}
+# define a t_id temporal "season" to asses seasonal patterns (latent random effect)
+
+df$t_id <- as.integer(factor(format(df$Time, "%Y-%m")))
+
+# year–month temporal specification did not provide sufficient support for a structured latent temporal effect at this resolution, leading to convergence issues in INLA for the temporal component. Therefore, specify month id
+
+df$month_id <- as.integer(format(df$Time, "%m"))
+
+
+```
+
+
+
+### Investigate target variable of interest, PM2.5 concentrations (AQ_pm25 -> air quality pm 2.5)
+
+```{r}
+
+summary(df$AQ_pm25) # lots of missing PM2.5 values
+sum(df$AQ_pm25 == 0, na.rm = TRUE) # a few 0 values (also imply missing as 0 concentraiton is basically impossible)
+
+# turn 0s into NaNs
+df$AQ_pm25[df$AQ_pm25 == 0] <- NaN
+# remove NaNs (and 0s) to analyse distribution of PM2.5
+complete_case_df <- df[!is.na(df$AQ_pm25), ]
+# note: can keep NaNs in modeling bc inla still works, but discludes NaNs in likelihood calculation but still outputs posterior predictions for them which may be useful
+
+# raw
+hist(complete_case_df$AQ_pm25, freq = FALSE, main = "Raw")
+
+# try fitting with log-normal
+
+# fit
+fit_lnorm <- fitdistr(complete_case_df$AQ_pm25, "lognormal")
+meanlog   <- fit_lnorm$estimate["meanlog"]
+sdlog     <- fit_lnorm$estimate["sdlog"]
+
+# plot histogram
+hist(complete_case_df$AQ_pm25, freq = FALSE,
+     main = "PM2.5 with Log-Normal Overlay",
+     xlab = "PM2.5 Concentration (µg/m³)",
+     col = "lightblue", border = "white",
+     ylim = c(0, 0.05))
+
+# overlay density
+x_seq <- seq(0, max(complete_case_df$AQ_pm25), length.out = 500)
+lines(x_seq, dlnorm(x_seq, meanlog = meanlog, sdlog = sdlog),
+      col = "darkgreen", lwd = 2)
+legend("topright", 
+       legend = c("Observed","Log-Normal"),
+       fill   = c("lightblue", NA, NA),
+       lty    = c(NA, 1),
+       col    = c("lightblue", "darkgreen"),
+       lwd    = c(NA, 2))
+
+
+# evaluate fit with AIC
+AIC(fit_lnorm)
+
+
+```
+
+
+
+### Create the mesh
+
+
+```{r}
+unique_locs <- unique(df[, c("Latitude", "Longitude")])
+
+statdomain <- inla.nonconvex.hull(
+  as.matrix(unique_locs[, c("Longitude", "Latitude")]),
+  convex = -0.05,
+  concave = -0.3,
+  resolution = c(100, 100)
+)
+plot(statdomain)
+
+statmesh <- fmesher::fm_mesh_2d(
+  boundary = statdomain,
+  max.edge = c(0.15, 0.4),
+  cutoff = 0.05
+)
+plot(statmesh)
+points(unique_locs[, c("Longitude", "Latitude")], col = "red", pch = 20, cex = 0.5)
+
+```
+
+
+### Fit models
+
+```{r, include=FALSE}
+# scale covariates
+# df$LI_bovine_v2_sc <- as.numeric(scale(df$LI_bovine_v2))
+# df$LI_pigs_v2_sc <- as.numeric(scale(df$LI_pigs_v2))
+df$Altitude_sc <- as.numeric(scale(df$Altitude))
+
+
+# spatial points
+Locations = data.frame(easting = df$Longitude, northing = df$Latitude)
+df$geometry <- sf::st_as_sf(Locations, coords = c("easting", "northing"))$geometry
+
+# SPDE model (spde spatial effect) -> specifying the priors for spatial effect (the only-non default priors for now)
+loc.spde = inla.spde2.pcmatern(
+  mesh        = statmesh,
+  prior.range = c(1, 0.5),
+  prior.sigma = c(1, 0.5),
+  constr      = TRUE
+)
+
+# Shared compute options (priors set per-component below)
+bru_opts <- list(
+  control.family  = list(
+    hyper = list(
+      prec = list(prior = "pc.prec", param = c(1, 0.01))
+    )
+  ),
+  control.compute = list(mlik = TRUE, cpo = TRUE, waic = TRUE)
+)
+
+# M0: Fixed effects only
+cmp_m0 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  Altitude_sc(Altitude_sc,
+              mean.linear = 0, prec.linear = 1)
+  #LI_bovine_v2_sc +
+  #LI_pigs_v2_sc
+
+m0_bru <- bru(
+  components = cmp_m0,
+  family     = "lognormal",
+  data       = df,
+  options    = bru_opts
+)
+
+# M1: Fixed + Temporal effect (rw1)
+cmp_m1 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  Altitude_sc(Altitude_sc,
+              mean.linear = 0, prec.linear = 1) +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc +
+  f(month_id, model = "rw1", cyclic = TRUE,
+    hyper = list(prec = list(prior = "pc.prec",
+                             param = c(1, 0.01))))
+
+m1_bru <- bru(
+  components = cmp_m1,
+  family     = "lognormal",
+  data       = df,
+  options    = bru_opts
+)
+
+# M2: Fixed + Spatial effects (SPDE - matern)
+cmp_m2 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  Altitude_sc(Altitude_sc,
+              mean.linear = 0, prec.linear = 1) +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc +
+  floc(geometry, model = loc.spde)
+
+m2_bru <- bru(
+  components = cmp_m2,
+  family     = "lognormal",
+  data       = df,
+  options    = bru_opts
+)
+
+# M3: Full spatio-temporal
+cmp_m3 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  Altitude_sc(Altitude_sc,
+              mean.linear = 0, prec.linear = 1) +
+  # LI_bovine_v2_sc +
+  # LI_pigs_v2_sc +
+  f(month_id, model = "rw1", cyclic = TRUE,
+    hyper = list(prec = list(prior = "pc.prec",
+                             param = c(1, 0.01)))) +
+  floc(geometry, model = loc.spde)
+
+m3_bru <- bru(
+  components = cmp_m3,
+  family     = "lognormal",
+  data       = df,
+  options    = bru_opts
+)
+
+```
+
+
+### Model comparison and selection
+
+
+```{r}
+# model comparison and selection
+
+# WAIC
+cat("M0 WAIC =",  m0_bru$waic$waic, "\n")
+cat("M1 WAIC =",  m1_bru$waic$waic, "\n")
+cat("M2 WAIC =",  m2_bru$waic$waic, "\n")
+cat("M3 WAIC =",  m3_bru$waic$waic, "\n\n")
+
+
+# NLSCPO
+m0_nlscpo <- -sum(log(m0_bru$cpo$cpo), na.rm = TRUE)
+m1_nlscpo <- -sum(log(m1_bru$cpo$cpo), na.rm = TRUE)
+m2_nlscpo <- -sum(log(m2_bru$cpo$cpo), na.rm = TRUE)
+m3_nlscpo <- -sum(log(m3_bru$cpo$cpo), na.rm = TRUE)
+
+cat("M0 NLSCPO =", m0_nlscpo, "\n")
+cat("M1 NLSCPO =", m1_nlscpo, "\n")
+cat("M2 NLSCPO =", m2_nlscpo, "\n")
+cat("M3 NLSCPO =", m3_nlscpo, "\n\n")
+
+
+# Marginal log-likelihood
+cat("M0 mlik =", m0_bru$mlik[1], "\n")
+cat("M1 mlik =", m1_bru$mlik[1], "\n")
+cat("M2 mlik =", m2_bru$mlik[1], "\n")
+cat("M3 mlik =", m3_bru$mlik[1], "\n")
+
+
+
+```
+
+Model 3 best.
+
+### Prior definitions of M3 (including "sensitivity analysis" with chosen model to decide on what priors to use)
+
+
+```{r}
+# Fixed effects - β (Intercept + covariate):
+
+fit_fixed_prior <- function(prec) {
+  cmp <- AQ_pm25 ~ 
+    Intercept(1,
+            mean.linear = 0,
+            prec.linear = prec) + 
+    Altitude_sc(Altitude_sc,
+                mean.linear=0,
+                prec.linear=prec) +      
+  f(month_id, model = "rw1", cyclic = TRUE) +
+  floc(geometry, model = loc.spde)
+  
+  bru(
+    components = cmp,
+    family = "lognormal",
+    data = df,
+    options = bru_opts
+  )
+}
+
+m3_fixed_vague  <- fit_fixed_prior(0.001) # very vague (weakly informative)
+m3_fixed_mod    <- fit_fixed_prior(1) # moderate
+m3_fixed_tight  <- fit_fixed_prior(10) # tight (strongly informative)
+
+# Compare priors
+extract_marginal <- function(model, param, label) {
+  marg <- as.data.frame(model$marginals.fixed[[param]])
+  marg$prior_spec <- label
+  marg
+}
+
+all_params <- c("Intercept", "Altitude_sc")
+
+all_marginals <- bind_rows(
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_vague, p, "Weak")),
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_mod,   p, "Moderate")),
+  lapply(all_params, function(p)
+    extract_marginal(m3_fixed_tight, p, "Strong"))
+) %>%
+  mutate(param = rep(rep(all_params, each = nrow(m3_fixed_vague$marginals.fixed[[1]])), 3))
+
+intercept_df <- dplyr::filter(all_marginals, param == "Intercept")
+altitude_df  <- dplyr::filter(all_marginals, param == "Altitude_sc")
+
+ggplot(intercept_df, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Fixed Effect (intercept)",
+    x = "Intercept",
+    y = "Posterior density",
+    colour = "Prior Specification"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+
+
+ggplot(altitude_df, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(
+    title = "Fixed Effect (altitude)",
+    x = "Altitude",
+    y = "Posterior density",
+    colour = "Prior Specification"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+```
+
+The weakly informative and moderately informative priors produced near-identical posterior distributions, indicating that the data are sufficiently informative to dominate prior specification across a reasonable range. The tight prior (precision = 10, SD ≈ 0.32) produced noticeably different posteriors, suggesting this specification is overly restrictive given the scale of the standardised covariates. In the absence of strong domain knowledge regarding the expected magnitude of altitude effects on PM2.5, a moderate prior (precision = 1, SD = 1) was selected for all fixed effects going forward, providing mild regularisation while allowing the data to drive inference.
+
+
+```{r}
+# Temporal effect (RW1 precision)
+
+
+fit_rw1_prior <- function(u, alpha, label) {
+  rw1_hyper <- list(prec = list(prior = "pc.prec", param = c(u, alpha)))
+  
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE, hyper = rw1_hyper) +
+    floc(geometry, model = loc.spde)
+  
+  bru(components = cmp, family = "lognormal",
+      data = df, options = bru_opts)
+}
+
+m3_rw1_smooth <- fit_rw1_prior(u = 0.1, alpha = 0.01, label = "Smooth")    # 1% chance month-to-month jumps exceed ~10% change in PM2.5
+m3_rw1_mod    <- fit_rw1_prior(u = 1,   alpha = 0.01, label = "Moderate")  # 1% chance jumps exceed ~170% change — allows real seasonal variation
+m3_rw1_flex <- fit_rw1_prior(u = 10, alpha = 0.01, label = "Flexible")  # 1% chance jumps exceed 10 on log scale — no meaningful constraint on seasonal variation
+
+# Extract posterior mean and credible interval for each month
+extract_rw1 <- function(model, label) {
+  rw1 <- model$summary.random$f
+  rw1$prior_spec <- label
+  rw1
+}
+
+rw1_sens <- bind_rows(
+  extract_rw1(m3_rw1_smooth, "Weak"),
+  extract_rw1(m3_rw1_mod,    "Moderate"),
+  extract_rw1(m3_rw1_flex,   "Strong")
+)
+
+ggplot(rw1_sens, aes(x = ID, y = mean, colour = prior_spec,
+                      fill = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  geom_ribbon(aes(ymin = `0.025quant`, ymax = `0.975quant`),
+              alpha = 0.2, colour = NA) +
+  labs(title = "RW1 Temporal Effect",
+       x = "Month", y = "Temporal Effect",
+       colour = "Prior Specification", fill = "Prior Specification") +
+  scale_x_continuous(breaks = 1:12,
+                     labels = month.abb) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+
+```
+
+All three prior specifications — smooth (u = 0.1), moderate (u = 1), and flexible (u = 10) — produced near-identical posterior seasonal curves, indicating that the data are sufficiently informative to determine the shape and magnitude of the temporal effect regardless of how strongly the prior constrains month-to-month variation. This is reassuring as it suggests the seasonal pattern in PM2.5 is a genuine signal in the data rather than an artefact of prior specification. Going forward, the moderate prior (u = 1, alpha = 0.01) was selected, as it represents a sensible default that places a weak but not negligible constraint on temporal variation — allowing meaningful seasonal fluctuation while providing mild regularisation — without requiring strong domain knowledge about the exact smoothness of the seasonal cycle.
+
+
+```{r}
+# Spatial effect (SPDE: ρ, σ)
+
+fit_spde_prior <- function(range0, Prange, sigma0, Psigma, label) {
+  spde <- inla.spde2.pcmatern(
+    mesh        = statmesh,
+    prior.range = c(range0, Prange),
+    prior.sigma = c(sigma0, Psigma),
+    constr=TRUE
+  )
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE,
+      hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+    floc(geometry, model = spde)
+  
+  bru(components = cmp, family = "lognormal",
+      data = df, options = bru_opts)
+}
+
+m3_spde_vague  <- fit_spde_prior(0.1, 0.5, 5, 0.5, "Weak") # range median ~10km, large spatial variance allowed variation
+m3_spde_mod    <- fit_spde_prior(1,   0.5, 1,   0.5, "Moderate") # range median ~100km, roughly a third of domain width
+m3_spde_tight  <- fit_spde_prior(3,   0.9, 0.5, 0.5, "Strong") # 90% chance range < 300km, modest spatial variance
+# Psigma = 0.5 ->  treat sigma0 as the prior median for sigma in each scenario
+
+
+extract_spde_marginal <- function(model, param_name, label) {
+  marg <- as.data.frame(
+    inla.smarginal(model$marginals.hyperpar[[param_name]])
+  )
+  marg$prior_spec <- label
+  marg
+}
+
+range_sens <- bind_rows(
+  extract_spde_marginal(m3_spde_vague, "Range for floc", "Weak"),
+  extract_spde_marginal(m3_spde_mod,   "Range for floc", "Moderate"),
+  extract_spde_marginal(m3_spde_tight, "Range for floc", "Strong")
+)
+
+ggplot(range_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  xlim(0,0.22) +
+  labs(title = "SPDE Spatial Effect (range)",
+       x = "Spatial range (degrees)", y = "Posterior density",
+       colour = "Prior Specification") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+sigma_sens <- bind_rows(
+  extract_spde_marginal(m3_spde_vague, "Stdev for floc", "Weak"),
+  extract_spde_marginal(m3_spde_mod,   "Stdev for floc", "Moderate"),
+  extract_spde_marginal(m3_spde_tight, "Stdev for floc", "Strong")
+)
+
+ggplot(sigma_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  xlim(0, 4) +
+  labs(title = "SPDE Spatial Effect (σ)",
+       x = "Spatial standard deviation σ", y = "Posterior density",
+       colour = "Prior Specification") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+
+
+
+```
+
+There is greater prior sensitivity than observed for the fixed effects or temporal component, particularly for the range parameter. The vague prior allowed the range to collapse toward very short distances inconsistent with the spatial scale of the domain, while the moderate and tight priors produced more stable and interpretable posteriors. For sigma, all three specifications concentrated around similar values (~0.2–0.3), however the moderate prior produced a notably tighter posterior, suggesting the moderate sigma prior (median = 1) is well-aligned with the signal in the data, while the vague and tight specifications introduced unnecessary additional uncertainty. Given the absence of strong domain knowledge, the moderate prior (range median ~100km, sigma median = 1) was selected as it produced well-identified posteriors for both parameters without unduly constraining the spatial field, and reflects a reasonable belief that spatial correlation in PM2.5 operates at a regional rather than hyper-local scale across the study domain
+
+
+```{r}
+# Log-normal likelihood precision
+
+fit_likelihood_prior <- function(u, alpha, label) {
+  spde <- inla.spde2.pcmatern(
+    mesh        = statmesh,
+    prior.range = c(1, 0.5),
+    prior.sigma = c(1, 0.5),
+    constr      = TRUE
+  )
+  cmp <- AQ_pm25 ~
+    Intercept(1, mean.linear = 0, prec.linear = 1) +
+    Altitude_sc(Altitude_sc, mean.linear = 0, prec.linear = 1) +
+    f(month_id, model = "rw1", cyclic = TRUE,
+      hyper = list(prec = list(prior = "pc.prec", param = c(1, 0.01)))) +
+    floc(geometry, model = spde)
+  bru(
+    components = cmp,
+    family     = "lognormal",
+    data       = df,
+    options    = list(
+      control.family  = list(
+        hyper = list(
+          prec = list(prior = "pc.prec", param = c(u, alpha))
+        )
+      ),
+      control.compute = list(waic = TRUE, cpo = FALSE, config = TRUE)
+    )
+  )
+}
+
+
+# posterior precision ~2.67 -> residual SD ~1/sqrt(2.67)~0.61
+# m3_bru$summary.hyperpar["Precision for the lognormal observations", ]
+
+m3_lik_vague  <- fit_likelihood_prior(u = 10,  alpha = 0.01, label = "Weak")    # essentially flat — well above posterior SD of 0.61
+m3_lik_mod    <- fit_likelihood_prior(u = 1,   alpha = 0.01, label = "Moderate") # mild constraint, brackets posterior from above
+m3_lik_tight  <- fit_likelihood_prior(u = 0.3, alpha = 0.01, label = "Strong")    # deliberately below posterior SD — tests if data dominate
+
+
+# extract marginals
+extract_lik_marginal <- function(model, label) {
+  marg <- as.data.frame(
+    inla.smarginal(
+      model$marginals.hyperpar[["Precision for the lognormal observations"]]
+    )
+  )
+  marg$prior_spec <- label
+  marg
+}
+
+lik_sens <- bind_rows(
+  extract_lik_marginal(m3_lik_vague,  "Weak"),
+  extract_lik_marginal(m3_lik_mod,    "Moderate"),
+  extract_lik_marginal(m3_lik_tight,  "Strong")
+)
+
+# plot
+ggplot(lik_sens, aes(x = x, y = y, colour = prior_spec)) +
+  geom_line(linewidth = 0.9) +
+  labs(title = "Log-Normal Likelihood Precision",
+       x = "Precision", y = "Posterior density",
+       colour = "Prior spec") +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    plot.title = element_text(size = 15, face = "bold")
+  )
+
+
+```
+
+
+Moderate (u = 1) and tight (u = 0.3) priors produced similar posterior distributions, while the vague (u=10) prior showed some deviation. This suggests that the data are sufficiently informative to dominate prior specification within a reasonable range, but that excessively diffuse priors can still influence the posterior. Given this, the moderate prior (u = 1) was selected going forward, as it provides mild regularisation without being overly restrictive, avoiding the instability of the vague prior while still allowing the data to primarily determine the posterior
+
+
+```{r, include=FALSE}
+# Model with select priors (mean.linear and prec.linear are priors, all the others are hyperpriors)
+
+# final SPDE with chosen priors
+loc.spde <- inla.spde2.pcmatern(
+  mesh        = statmesh,
+  prior.range = c(1, 0.5),
+  prior.sigma = c(1, 0.5),
+  constr      = TRUE
+)
+
+cmp_m3 <- AQ_pm25 ~
+  Intercept(1,
+            mean.linear = 0, prec.linear = 1) +
+  Altitude_sc(Altitude_sc,
+                mean.linear = 0, prec.linear = 1) +
+  f(month_id, model = "rw1", cyclic = TRUE,
+    hyper = list(prec = list(prior = "pc.prec",
+                             param = c(1, 0.01)))) +
+  floc(geometry, model = loc.spde)
+
+m3_revised <- bru(
+  components = cmp_m3,
+  family     = "lognormal",
+  data       = df,
+  options    = list(
+    control.family  = list(
+      hyper = list(
+        prec = list(prior = "pc.prec", param = c(1, 0.01))
+      )
+    ),
+    control.compute = list(cpo = TRUE, dic=TRUE, config = TRUE, mlik=TRUE, waic=TRUE)
+  )
+)
+
+```
+
+
+Remarks:
+-Priors were selected through empirical sensitivity analysis rather than arbitrarily, with a consistent preference for moderate regularisation across all components.
+-RW1 term and likelihood precision were relatively robust to prior specification, while the fixed effects and SPDE parameters showed more sensitivity; the moderate prior was retained for stability and interpretability.
+-Model diagnostics indicate negligible impact of prior revision on performance
+-Overall, the model is robust to reasonable prior perturbations, supporting the chosen specification as stable for inference and prediction.
+
+
+### Global diagnostics of chosen model
+
+```{r}
+# sample from posterior
+
+df_obs <- df[!is.na(df$AQ_pm25), ] # disclude rows with missing response (want to compare observed against predicted)
+
+n_sims <- 500 # may want to crank this up
+y_rep <- matrix(NA, nrow = nrow(df_obs), ncol = n_sims)
+post_samples <- inla.posterior.sample(n_sims, m3_revised)
+
+for(i in 1:n_sims){
+  s <- post_samples[[i]]
+  eta <- s$latent[1:nrow(df_obs)]        # linear predictor for each row
+  sigma <- 1 / sqrt(s$hyperpar[[1]])     # lognormal sd from precision hyperpar
+  y_rep[, i] <- rlnorm(nrow(df_obs), meanlog = eta, sdlog = sigma)
+}
+
+dim(y_rep)
+y_rep_all <- as.vector(y_rep)
+
+```
+
+
+```{r}
+# bayesian studentised residuals
+
+# compute residuals
+n <- nrow(df_obs)
+y <- log(df_obs$AQ_pm25)
+
+X <- cbind(1, df_obs$Altitude_sc)
+XtX_inv <- solve(t(X) %*% X)
+h <- rowSums((X %*% XtX_inv) * X)
+
+studentisedred <- matrix(NA, nrow = n, ncol = n_sims)
+for(l in 1:n_sims){
+  s <- post_samples[[l]]
+  eta <- s$latent[1:n]                   
+  sigma <- 1 / sqrt(s$hyperpar[[1]])
+  studentisedred[,l] <- (y - eta) / sqrt(sigma^2 * (1 - h))
+}
+studentisedredm <- apply(studentisedred, 1, mean)
+
+
+# qq plot - checks log normality assumption
+qqnorm(studentisedredm,
+       main="Log-Normal Q-Q",
+       xlab = "Theoretical Quantiles",
+       ylab = "Sample Quantiles",
+       pch = 16, cex = 0.4, col = "black",
+       cex.main = 1.6,
+       xlim = c(-3,3), ylim = c(-3,3),
+       cex.lab = 1.5) 
+qqline(studentisedredm, col = "red", lwd = 1.5)
+
+
+# residuals against index plot - checks independence of error terms
+# plot(seq_along(studentisedredm), studentisedredm, xlab="Index", ylab="Bayesian studentised residual (posterior mean)")
+
+# look at the extreme observation
+# df_obs[which(studentisedredm < -10), c("IDStations", "Time", "AQ_pm25", "LI_bovine_v2_sc", "LI_pigs_v2_sc")] # dont plot extreme outlier (this is the value with the smallest pm25 observation, way smaller than any others, basically 0)
+
+plot(seq_along(studentisedredm), studentisedredm, 
+     main="Residuals vs. Index",
+     xlab = "Index", 
+     ylab = "Studentised Residuals", 
+     ylim = c(-8, 8),
+     cex.main = 1.6,
+     cex.lab = 1.5,
+     pch = 16,      
+     cex = 0.2)
+
+# residuals against posterior mean of fitted values - linearity and constant variance of residuals
+fittedvalues <- matrix(0, nrow = n, ncol = n_sims)
+for(i in 1:n_sims){
+  s <- post_samples[[i]]
+  eta <- s$latent[1:n]
+  fittedvalues[, i] <- exp(eta)
+}
+
+fittedvaluesm<-numeric(n)
+for(i in 1:n){fittedvaluesm[i]=mean(fittedvalues[i,])}
+plot(fittedvaluesm,studentisedredm,
+     main="Residuals vs. Posterior Mean",
+     xlab="Fitted value (posterior mean)",
+     ylab="Studentised Residuals",
+     ylim=c(-8, 8), # get rid of that same outlier here too
+     pch = 16,
+     cex.lab = 1.5,
+     cex.main = 1.6,
+     cex=0.2)
+
+
+```
+
+
+
+```{r}
+# histogram of sampled stats and observed ones
+
+df_obs <- df_obs[which(df_obs$AQ_pm25 > 3.699e-20), ] # get rid of that extreme outlier
+
+yrepmin <- apply(y_rep, 2, min)
+yrepmax <- apply(y_rep, 2, max)
+yrepmedian <- apply(y_rep, 2, median)
+require(fBasics)
+yrepskewness <- apply(y_rep, 2, skewness)
+
+obs_min <- min(df_obs$AQ_pm25)
+obs_max <- max(df_obs$AQ_pm25)
+obs_median <- median(df_obs$AQ_pm25)
+obs_skewness <- skewness(df_obs$AQ_pm25)
+
+# plot
+par(mfrow = c(2, 2))
+
+hist(yrepmin, main = "Min", xlab = "Min PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_min, col = "red", lwd = 2)
+
+hist(yrepmax, main = "Max", xlab = "Max PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_max, col = "red", lwd = 2)
+
+hist(yrepmedian, main = "Median", xlab = "Median PM2.5", col = "lightgrey", border = "white")
+abline(v = obs_median, col = "red", lwd = 2)
+
+hist(yrepskewness, main = "Skewness", xlab = "Skewness PM2.5", col = "lightgrey", border = "white",  xlim = c(min(obs_skewness), 16))
+abline(v = obs_skewness, col = "red", lwd = 2)
+
+par(mfrow = c(1, 1))
+
+
+
+
+```
+
+
+```{r}
+# plot of observed vs predicted values
+
+pred_mean <- rowMeans(y_rep)
+
+# plot
+hist(df_obs$AQ_pm25, 
+     freq     = FALSE,
+     main     = "",
+     xlab     = "PM2.5 (µg/m³) ",
+     col      = rgb(0, 0, 1, 0.3),
+     border   = "white",
+     breaks   = 50,
+     cex.lab = 1.5,
+     ylim = c(0, 0.07))
+
+lines(density(pred_mean), col = "red", lwd = 2)
+
+legend("topright",
+       legend = c("Observed", "Posterior predictive mean"),
+       fill   = c(rgb(0, 0, 1, 0.3), NA),
+       border = c("white", NA),
+       lty    = c(NA, 1),
+       col    = c(NA, "red"),
+       lwd    = c(NA, 2))
+
+
+
+```
+
+
+```{r}
+# numeric absolute measures of fit
+
+# # bayesian posterior predictive p-values of mean and variance
+# 
+# yrepmean <- apply(y_rep, 2, mean)
+# yrepvar  <- apply(y_rep, 2, var)
+# 
+# obs_mean <- mean(df_obs$AQ_pm25)
+# obs_var <- var(df_obs$AQ_pm25)
+# 
+# p_mean <- mean(yrepmean >= obs_mean)
+# p_var  <- mean(yrepvar >= obs_var)
+# 
+# bayes_pvals <- c(
+#                  mean = p_mean,
+#                  variance = p_var)
+# 
+# print(bayes_pvals)
+
+# crps
+crps_values <- crps_sample(y = df_obs$AQ_pm25, dat = y_rep)
+crps_mean <- mean(crps_values)
+
+cat("CRPS =", round(crps_mean, 3), "\n")
+
+
+
+
+
+```
+
+
+
+
+
+
+###  Convergence Diagnostics
+
+```{r}
+
+# ??!!
+
+
+
+
+```
+
+
+
+### Visualise the random effects
+
+```{r}
+
+# Zac's
+# meshlocs <- as.data.frame(statmesh$loc); names(meshlocs) <- c("lon","lat")
+# 
+# # (M1) Temporal random effect
+# plot(m1_bru$summary.random$f$mean, type="l")
+# 
+# # (M3) Temporal random effect
+# plot(m3_bru$summary.random$ftime$mean, type="l")
+# 
+# # (M2) Spatial random effect
+# ggplot(meshlocs, aes(x = lon, y = lat, color = m2_bru$summary.random$floc$mean)) +
+#   geom_point(size = 2) +
+#   scale_color_viridis_c() +
+#   coord_equal() +
+#   theme_minimal()
+# 
+# # (M3) Spatial random effect
+# ggplot(meshlocs, aes(x = lon, y = lat, color = m3_bru$summary.random$floc$mean)) +
+#   geom_point(size = 2) +
+#   scale_color_viridis_c() +
+#   coord_equal() +
+#   theme_minimal()
+
+
+# Jackson's
+
+# temporal (M3)
+plot(m3_revised$summary.random$f$mean, type = "l",
+     main = "M3: Temporal Random Effect",
+     xlab = "Time index",
+     ylab = "Effect (mean)")
+
+# spatial (M3)
+ggplot(meshlocs, aes(x = lon, y = lat, color = m3_revised$summary.random$floc$mean)) +
+  geom_point(size = 2) +
+  scale_color_viridis_c() +
+  coord_equal() +
+  theme_minimal() +
+  labs(title = "M3: Spatial Random Effect",
+       color = "Effect")
+
+
+
+# Zac's updated (spatial only)
+
+pix <- fm_pixels(statmesh, dims = c(200, 200),format = "sf")
+pred <- predict(m3_revised, pix, formula=~floc)
+ggplot() +
+  gg(statmesh) +
+  gg(pred, aes(color = mean))+
+  scale_color_gradientn(colours=brewer.pal(11, "RdYlBu"),
+                        limits=range(pred$mean))+
+  geom_point(
+  data = df,
+  aes(x = Longitude, y = Latitude,color = area_id == 108))
+  
+
+# how to generate things from existing datapoints using predict
+pred2 <- predict(m3_revised,df[,c("geometry","LI_bovine_v2_sc","LI_pigs_v2_sc","month_id")], 
+                 formula=AQ_pm25~Intercept+LI_bovine_v2_sc+LI_pigs_v2_sc+f+floc)
+
+```
+
+**Fixed effect results**
+
+```{r}
+
+post_altitude <- m3_revised$marginals.fixed$Altitude_sc
+plot(post_altitude, type="l", main="Posterior marginal for altitude",
+     ylab="Posterior density", xlab="FE value")
+
+intercept <- m3_revised$marginals.fixed$Intercept
+plot(intercept, type="l", main="Posterior marginal for intercept",
+     ylab="Posterior density", xlab="FE value")
+
+
+```
+
+The posterior distribution for the intercept is centred around 2.7 and
+contains almost all probability between 2.5 and 2.9. The fixed effect
+coefficient for the affect of the altitude is centred around -0.2 and spans from -0.4 to 0.1.
+
+Due to the log link function, for fixed effect exp(coef) act as
+multipliers. That is, if the density of altitude increases by one unit,
+the PM2.5 reading decreases by a factor of exp(coef_altitude).
+
+
+```{r}
+
+multipliers <- m3_revised$summary.fixed
+
+multipliers 
+
+# exp(multipliers)
+
+```
+
+The table displays the median effect, plus quantiles giving a 95%
+credible interval for the fixed effect parameter. The multiplier for
+altitude is below 1, suggesting that increased altitude is associated with a decrease in the pollution at that location and month.
+
+
